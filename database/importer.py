@@ -1,59 +1,69 @@
-print("Importer avviato")
-
 import sqlite3
-import pandas as pd
-import os
+from pathlib import Path
 
+import pandas as pd
+
+from config.assets import STOCKS, ETFS
 
 DATABASE_PATH = "database/market.db"
-DATA_FOLDER = "data/raw"
+DATA_FOLDER = Path("data/raw")
 
 
 def import_csv_to_database(ticker):
+    """
+    Importa un file CSV nel database SQLite.
+    Se il ticker è già presente, i vecchi dati vengono sostituiti.
+    """
 
-    file_path = f"{DATA_FOLDER}/{ticker}.csv"
+    csv_file = DATA_FOLDER / f"{ticker}.csv"
 
-    if not os.path.exists(file_path):
-        print(f"File non trovato: {file_path}")
+    if not csv_file.exists():
+        print(f"File non trovato: {csv_file}")
         return
 
     print(f"Importazione {ticker}...")
 
-    data = pd.read_csv(
-        file_path,
-        header=[0, 1],
-        index_col=0
-    )
+    # Legge il CSV
+    data = pd.read_csv(csv_file)
+
+    # Alcune versioni di yfinance salvano colonne MultiIndex.
+    # Se presenti, manteniamo solo il primo livello.
+    if isinstance(data.columns, pd.MultiIndex):
+        data.columns = data.columns.get_level_values(0)
+
+    # Rinomina le colonne in minuscolo
+    data.columns = [str(col).lower() for col in data.columns]
+
+    # Rimuove la colonna "adj close" se presente
+    if "adj close" in data.columns:
+        data = data.drop(columns=["adj close"])
 
     connection = sqlite3.connect(DATABASE_PATH)
-
     cursor = connection.cursor()
 
-    for index, row in data.iterrows():
+    # Elimina eventuali dati già presenti per questo ticker
+    cursor.execute(
+        "DELETE FROM market_data WHERE ticker = ?",
+        (ticker,)
+    )
 
+    # Inserisce tutte le righe
+    for _, row in data.iterrows():
         cursor.execute(
             """
             INSERT INTO market_data
-            (
-                ticker,
-                date,
-                open,
-                high,
-                low,
-                close,
-                volume
-            )
+            (ticker, date, open, high, low, close, volume)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 ticker,
-                str(index),
-                float(row[("Open", ticker)]),
-                float(row[("High", ticker)]),
-                float(row[("Low", ticker)]),
-                float(row[("Close", ticker)]),
-                int(row[("Volume", ticker)])
-            )
+                row["date"],
+                float(row["open"]),
+                float(row["high"]),
+                float(row["low"]),
+                float(row["close"]),
+                int(row["volume"]),
+            ),
         )
 
     connection.commit()
@@ -64,4 +74,11 @@ def import_csv_to_database(ticker):
 
 if __name__ == "__main__":
 
-    import_csv_to_database("AAPL")
+    print("Importer avviato")
+
+    assets = STOCKS + ETFS
+
+    for ticker in assets:
+        import_csv_to_database(ticker)
+
+    print("\nImportazione completata.")
