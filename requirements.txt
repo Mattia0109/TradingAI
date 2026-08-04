@@ -6,3 +6,4 @@ scikit-learn
 jupyter
 python-dotenv
 requests
+yfinance
