@@ -4,14 +4,18 @@ import pandas as pd
 from analysis.indicators import (
     calculate_returns,
     calculate_sma,
-    calculate_volatility
+    calculate_volatility,
+    calculate_ema,
+    calculate_rsi,
+    calculate_macd,
+    calculate_bollinger_bands
 )
 
 
 DATABASE_PATH = "database/market.db"
 
 
-def load_data(ticker):
+def load_asset(ticker):
 
     connection = sqlite3.connect(DATABASE_PATH)
 
@@ -19,6 +23,7 @@ def load_data(ticker):
     SELECT date, open, high, low, close, volume
     FROM market_data
     WHERE ticker = '{ticker}'
+    ORDER BY date
     """
 
     data = pd.read_sql_query(
@@ -34,26 +39,54 @@ def load_data(ticker):
 
 if __name__ == "__main__":
 
-    print("Caricamento dati AAPL...")
+    ticker = "AAPL"
 
-    data = load_data("AAPL")
+    print(f"Caricamento dati {ticker}...")
+
+    data = load_asset(ticker)
+
 
     print("\nDati originali:")
+
     print(data.head())
 
 
+    # Indicatori base
+
     data = calculate_returns(data)
 
-    data = calculate_sma(
-        data,
-        period=20
+    data = calculate_sma(data)
+
+    data = calculate_volatility(data)
+
+
+    # Indicatori avanzati
+
+    data = calculate_ema(data)
+
+    data = calculate_rsi(data)
+
+    data = calculate_macd(data)
+
+    data = calculate_bollinger_bands(data)
+
+
+    print("\nAnalisi indicatori completata:")
+
+    print(
+        data[
+            [
+                "date",
+                "close",
+                "Returns",
+                "SMA_20",
+                "EMA_12",
+                "RSI",
+                "MACD",
+                "MACD_signal",
+                "BB_upper",
+                "BB_lower",
+                "Volatility"
+            ]
+        ].tail()
     )
-
-    data = calculate_volatility(
-        data,
-        period=20
-    )
-
-
-    print("\nAnalisi completata:")
-    print(data.tail())
