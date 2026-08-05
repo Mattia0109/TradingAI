@@ -1,24 +1,37 @@
 from scanner.market_scanner import MarketScanner
 from execution.execution_engine import ExecutionEngine
+from bot.strategy_runner import StrategyRunner
+
 
 
 class TradingBot:
     """
-    Controller principale del sistema trading.
-
-    Coordina:
-    - scanner mercato
-    - analisi
-    - decisione
-    - esecuzione
+    Controller principale del trading bot.
     """
 
 
-    def __init__(self):
+    def __init__(
+        self,
+        decision_engine,
+        ranker
+    ):
+
 
         self.scanner = MarketScanner()
 
         self.execution = ExecutionEngine()
+
+
+        self.strategy_runner = StrategyRunner(
+
+            decision_engine,
+
+            ranker,
+
+            self.execution
+
+        )
+
 
         self.running = False
 
@@ -29,12 +42,31 @@ class TradingBot:
         self.running = True
 
 
+
     def stop(self):
 
         self.running = False
 
 
 
-    def scan_market(self):
+    def run_cycle(self):
 
-        return self.scanner.get_tickers()
+
+        assets = self.scanner.get_tickers()
+
+
+        opportunities = self.strategy_runner.evaluate_market(
+
+            assets
+
+        )
+
+
+        trade = self.strategy_runner.execute_best_trade(
+
+            opportunities
+
+        )
+
+
+        return trade
