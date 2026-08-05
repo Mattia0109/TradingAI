@@ -3,4 +3,4 @@ venv/
 __pycache__/
 *.pyc
 data/raw/
-database/*.db
+database/*.d
