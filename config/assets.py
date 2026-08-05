@@ -14,3 +14,6 @@ ETFS = [
     "QQQ",
     "VTI"
 ]
+
+
+ALL_ASSETS = STOCKS + ETFS
