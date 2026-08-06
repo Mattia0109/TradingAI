@@ -1,78 +1,55 @@
 class OpportunityRanker:
-    """
-    Classifica le opportunità di trading.
-    """
-
-    def __init__(self):
-        pass
-
 
     def calculate_score(self, result):
 
         signal = result["signal"]
 
-        score = 0
+        if isinstance(signal, dict):
 
+            confidence = signal["confidence"]
+            rr = signal["risk_reward"]
+            ticker = signal["ticker"]
 
-        # Qualità del segnale
+        else:
 
-        score += signal.confidence
+            confidence = signal.confidence
+            rr = signal.risk_reward
+            ticker = signal.ticker
 
+        score = confidence
+        score += rr * 10
 
-        # Rapporto rischio rendimento
-
-        score += signal.risk_reward * 10
-
-
-        # Bonus se il trade è approvato
-
-        if result["approved"]:
-
-            score += 10
-
-
-        # Penalità se non ha motivazioni positive
-
-        if len(signal.reasons) > 0:
-
-            score -= 5
-
-
-        return round(score, 2)
-
-
+        return score
 
     def rank(self, results):
 
         ranked = []
 
-
         for result in results:
 
+            if not result["approved"]:
+                continue
 
-            if result["approved"]:
+            signal = result["signal"]
 
+            if isinstance(signal, dict):
+                ticker = signal["ticker"]
+            else:
+                ticker = signal.ticker
 
-                score = self.calculate_score(
-                    result
-                )
+            score = self.calculate_score(result)
 
-
-                ranked.append({
-
-                    "ticker": result["signal"].ticker,
-
+            ranked.append(
+                {
+                    "ticker": ticker,
                     "score": score,
-
-                    "signal": result["signal"]
-
-                })
-
+                    "signal": signal
+                }
+            )
 
         ranked.sort(
             key=lambda x: x["score"],
             reverse=True
         )
-
 
         return ranked

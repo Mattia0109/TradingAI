@@ -15,7 +15,7 @@ def test_scanner_creation():
 
     assert "BTC-USD" in tickers
 
-    assert "EURUSD" in tickers
+    assert "EURUSD=X" in tickers
 
     assert "GC=F" in tickers
 

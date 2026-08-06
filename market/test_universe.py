@@ -15,6 +15,6 @@ def test_market_universe():
 
     assert "BTC-USD" in assets
 
-    assert "EURUSD" in assets
+    assert "EURUSD=X" in assets
 
     assert "GC=F" in assets

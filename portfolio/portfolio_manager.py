@@ -19,6 +19,106 @@ from analysis.analyzer import analyze_asset
 DATABASE_PATH = "database/market.db"
 
 
+# Portfolio Risk Settings
+
+MAX_POSITION_SIZE = 0.10
+
+
+
+def calculate_position_size(
+    capital,
+    signal
+):
+    """
+    Calcola la dimensione della posizione
+    in base alla percentuale massima
+    del capitale.
+    """
+
+    confidence = signal["confidence"]
+
+    risk_reward = signal["risk_reward"]
+
+    entry_price = signal["entry_price"]
+
+
+    # Blocca trade con rischio/rendimento insufficiente
+
+    if risk_reward < 2:
+
+        return {
+
+            "allocation_percent": 0,
+
+            "position_value": 0,
+
+            "shares": 0
+
+        }
+
+
+
+    # Allocazione dinamica
+
+    if confidence < 50:
+
+        allocation = 0
+
+
+    elif confidence < 65:
+
+        allocation = 0.03
+
+
+    elif confidence < 80:
+
+        allocation = 0.05
+
+
+    elif confidence < 90:
+
+        allocation = 0.08
+
+
+    else:
+
+        allocation = 0.10
+
+
+
+    # Limite massimo assoluto
+
+    allocation = min(
+        allocation,
+        MAX_POSITION_SIZE
+    )
+
+
+
+    position_value = (
+        capital *
+        allocation
+    )
+
+
+    shares = int(
+        position_value /
+        entry_price
+    )
+
+
+
+    return {
+
+        "allocation_percent": allocation,
+
+        "position_value": position_value,
+
+        "shares": shares
+
+    }
+
+
 
 def load_asset(ticker):
 
