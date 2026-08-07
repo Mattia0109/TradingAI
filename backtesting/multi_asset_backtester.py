@@ -1111,6 +1111,34 @@ class MultiAssetBacktester:
                 ),
                 "maximum_resize_cost_ratio": (
                     self.maximum_resize_cost_ratio
+                ),
+                "strategy_signal_sizing": (
+                    getattr(
+                        self.strategy,
+                        "signal_sizing",
+                        None
+                    )
+                ),
+                "strategy_component_method": (
+                    getattr(
+                        self.strategy,
+                        "component_method",
+                        None
+                    )
+                ),
+                "strategy_trend_significance_threshold": (
+                    getattr(
+                        self.strategy,
+                        "trend_significance_threshold",
+                        None
+                    )
+                ),
+                "strategy_no_trade_threshold": (
+                    getattr(
+                        self.strategy,
+                        "no_trade_threshold",
+                        None
+                    )
                 )
             },
             "metrics": metrics,

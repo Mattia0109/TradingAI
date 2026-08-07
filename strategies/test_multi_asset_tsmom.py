@@ -94,6 +94,158 @@ def test_downtrend_generates_short_signal():
     assert result["strength"] > 0
 
 
+def test_directional_sizing_uses_unit_signal():
+
+    strategy = (
+        MultiAssetTimeSeriesMomentumStrategy(
+            signal_sizing="directional"
+        )
+    )
+
+    long_result = strategy.generate_signal(
+        data=create_trending_data(
+            direction=1
+        ),
+        ticker="SPY"
+    )
+
+    short_result = strategy.generate_signal(
+        data=create_trending_data(
+            direction=-1
+        ),
+        ticker="TLT"
+    )
+
+    assert long_result[
+        "signal"
+    ] == pytest.approx(
+        1.0
+    )
+
+    assert short_result[
+        "signal"
+    ] == pytest.approx(
+        -1.0
+    )
+
+    assert abs(
+        long_result[
+            "raw_signal"
+        ]
+    ) <= 1.0
+
+    assert long_result[
+        "signal_sizing"
+    ] == "directional"
+
+
+def test_linear_trend_method_detects_direction():
+
+    strategy = (
+        MultiAssetTimeSeriesMomentumStrategy(
+            component_method="linear_trend",
+            signal_sizing="directional"
+        )
+    )
+
+    long_result = strategy.generate_signal(
+        data=create_trending_data(
+            direction=1
+        ),
+        ticker="SPY"
+    )
+
+    short_result = strategy.generate_signal(
+        data=create_trending_data(
+            direction=-1
+        ),
+        ticker="TLT"
+    )
+
+    assert long_result[
+        "action"
+    ] == "LONG"
+
+    assert short_result[
+        "action"
+    ] == "SHORT"
+
+    assert long_result[
+        "component_method"
+    ] == "linear_trend"
+
+    assert all(
+        component[
+            "normalized_momentum"
+        ]
+        in {
+            -1.0,
+            0.0,
+            1.0
+        }
+        for component
+        in long_result[
+            "components"
+        ].values()
+    )
+
+
+def test_linear_trend_ignores_insignificant_oscillation():
+
+    row_count = 340
+
+    data = pd.DataFrame(
+        {
+            "date": pd.date_range(
+                start="2020-01-01",
+                periods=row_count,
+                freq="1D"
+            ),
+            "close": (
+                100
+                +
+                np.where(
+                    np.arange(
+                        row_count
+                    )
+                    %
+                    2
+                    ==
+                    0,
+                    1,
+                    -1
+                )
+            )
+        }
+    )
+
+    strategy = (
+        MultiAssetTimeSeriesMomentumStrategy(
+            component_method="linear_trend",
+            signal_sizing="directional"
+        )
+    )
+
+    result = strategy.generate_signal(
+        data=data,
+        ticker="SPY"
+    )
+
+    assert result[
+        "action"
+    ] == "FLAT"
+
+    assert all(
+        component[
+            "normalized_momentum"
+        ] == 0.0
+        for component
+        in result[
+            "components"
+        ].values()
+    )
+
+
 def test_flat_prices_generate_flat_signal():
 
     dates = pd.date_range(
@@ -228,4 +380,39 @@ def test_invalid_lookback_weights_are_rejected():
                 21: 1.0,
                 63: -0.5
             }
+        )
+
+
+def test_invalid_signal_sizing_is_rejected():
+
+    with pytest.raises(ValueError):
+        MultiAssetTimeSeriesMomentumStrategy(
+            signal_sizing="unknown"
+        )
+
+
+def test_invalid_component_method_is_rejected():
+
+    with pytest.raises(ValueError):
+        MultiAssetTimeSeriesMomentumStrategy(
+            component_method="unknown"
+        )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        0.0,
+        -1.0,
+        float("inf"),
+        float("nan")
+    ]
+)
+def test_invalid_trend_significance_is_rejected(
+    value
+):
+
+    with pytest.raises(ValueError):
+        MultiAssetTimeSeriesMomentumStrategy(
+            trend_significance_threshold=value
         )
