@@ -33,7 +33,8 @@ class PortfolioRiskAllocator:
         drawdown_start=0.05,
         drawdown_medium=0.10,
         drawdown_severe=0.15,
-        drawdown_kill_switch=0.20
+        drawdown_kill_switch=0.20,
+        minimum_drawdown_multiplier=0.25
     ):
         if target_portfolio_volatility <= 0:
             raise ValueError(
@@ -67,6 +68,22 @@ class PortfolioRiskAllocator:
         if turnover_buffer < 0:
             raise ValueError(
                 "turnover_buffer non può essere negativo."
+            )
+
+        minimum_drawdown_multiplier = float(
+            minimum_drawdown_multiplier
+        )
+
+        if (
+            not math.isfinite(
+                minimum_drawdown_multiplier
+            )
+            or
+            not 0 < minimum_drawdown_multiplier <= 0.50
+        ):
+            raise ValueError(
+                "minimum_drawdown_multiplier deve essere "
+                "compreso tra 0 e 0.50."
             )
 
         drawdown_levels = [
@@ -141,6 +158,10 @@ class PortfolioRiskAllocator:
 
         self.drawdown_kill_switch = float(
             drawdown_kill_switch
+        )
+
+        self.minimum_drawdown_multiplier = (
+            minimum_drawdown_multiplier
         )
 
 
@@ -343,14 +364,16 @@ class PortfolioRiskAllocator:
         )
 
         return max(
-            0.0,
+            self.minimum_drawdown_multiplier,
             0.50
-            *
+            -
             (
-                1.0
+                0.50
                 -
-                progress
+                self.minimum_drawdown_multiplier
             )
+            *
+            progress
         )
 
 
