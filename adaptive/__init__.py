@@ -5,6 +5,12 @@ from adaptive.backtester import (
     AdaptiveBacktestResult,
     AdaptiveBacktester,
 )
+from adaptive.learning import (
+    CausalRegimePerformanceTracker,
+    RegimeLearningConfig,
+    RegimePerformanceState,
+)
+from adaptive.validation import PromotionGateResult, evaluate_challenger
 
 from adaptive.models import (
     AdaptiveCycleResult,
@@ -41,6 +47,7 @@ __all__ = [
     "AdaptiveBacktestConfig",
     "AdaptiveBacktestResult",
     "AdaptiveBacktester",
+    "CausalRegimePerformanceTracker",
     "AdaptiveCycleResult",
     "AdaptiveSystemConfig",
     "AdaptiveTradingSystem",
@@ -56,11 +63,15 @@ __all__ = [
     "NewsAssessment",
     "NewsEventType",
     "PortfolioState",
+    "PromotionGateResult",
     "PortfolioAllocation",
     "PortfolioAllocatorConfig",
     "RegimeAssessment",
+    "RegimeLearningConfig",
+    "RegimePerformanceState",
     "RiskDecision",
     "StrategyForecast",
     "StructuredNewsIntelligence",
     "UniverseAnalysisResult",
+    "evaluate_challenger",
 ]

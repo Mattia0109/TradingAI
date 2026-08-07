@@ -21,7 +21,9 @@ from adaptive.execution_gate import EconomicExecutionGate
 from adaptive.feature_engine import AdaptiveFeatureEngine
 from adaptive.journal import SQLiteDecisionJournal
 from adaptive.learning import (
+    CausalRegimePerformanceTracker,
     ControlledPerformanceTracker,
+    RegimePerformanceState,
     StrategyPerformanceState,
 )
 from adaptive.meta_model import AdaptiveMetaModel
@@ -34,6 +36,7 @@ from adaptive.models import (
     CycleStatus,
     ExecutionEstimate,
     FeatureSnapshot,
+    MarketRegime,
     PortfolioState,
     StrategyForecast,
 )
@@ -87,7 +90,9 @@ class AdaptiveTradingSystem:
         risk_engine: AdaptiveRiskEngine | None = None,
         execution_gate: EconomicExecutionGate | None = None,
         news_intelligence: StructuredNewsIntelligence | None = None,
-        performance_tracker: ControlledPerformanceTracker | None = None,
+        performance_tracker: (
+            ControlledPerformanceTracker | CausalRegimePerformanceTracker | None
+        ) = None,
         portfolio_allocator: AdaptivePortfolioAllocator | None = None,
         journal: SQLiteDecisionJournal | None = None,
         config: AdaptiveSystemConfig | None = None,
@@ -107,7 +112,9 @@ class AdaptiveTradingSystem:
         self.portfolio_allocator = portfolio_allocator or AdaptivePortfolioAllocator()
         self.journal = journal or SQLiteDecisionJournal()
         self.config = config or AdaptiveSystemConfig()
-        self._pending: OrderedDict[str, tuple[StrategyForecast, ...]] = OrderedDict()
+        self._pending: OrderedDict[
+            str, tuple[tuple[StrategyForecast, ...], MarketRegime]
+        ] = OrderedDict()
         self._lock = threading.RLock()
 
         strategy_ids = [self._strategy_id(strategy) for strategy in self.strategies]
@@ -144,10 +151,13 @@ class AdaptiveTradingSystem:
         )
 
     def _remember_forecasts(
-        self, cycle_id: str, forecasts: tuple[StrategyForecast, ...]
+        self,
+        cycle_id: str,
+        forecasts: tuple[StrategyForecast, ...],
+        regime: MarketRegime,
     ) -> None:
         with self._lock:
-            self._pending[cycle_id] = forecasts
+            self._pending[cycle_id] = (forecasts, regime)
             self._pending.move_to_end(cycle_id)
             while len(self._pending) > self.config.maximum_pending_cycles:
                 self._pending.popitem(last=False)
@@ -192,7 +202,7 @@ class AdaptiveTradingSystem:
         meta = self.meta_model.combine(
             immutable_forecasts,
             regime,
-            self.performance_tracker.weights(),
+            self.performance_tracker.weights(regime.primary),
             ticker=snapshot.ticker,
         )
         risk = self.risk_engine.evaluate(meta, snapshot, regime, portfolio)
@@ -219,7 +229,7 @@ class AdaptiveTradingSystem:
             strategy_errors=strategy_errors,
         )
         self.journal.record_cycle(result)
-        self._remember_forecasts(cycle_id, immutable_forecasts)
+        self._remember_forecasts(cycle_id, immutable_forecasts, regime.primary)
         return result
 
     def analyze_market(
@@ -325,7 +335,7 @@ class AdaptiveTradingSystem:
         slippage_return: float = 0.0,
         model_error: float | None = None,
         closed_at: datetime | None = None,
-    ) -> Mapping[str, StrategyPerformanceState]:
+    ) -> Mapping[str, StrategyPerformanceState | RegimePerformanceState]:
         """Registra l'outcome e aggiorna pesi limitati; il codice non cambia."""
 
         realized = float(realized_asset_return)
@@ -342,9 +352,10 @@ class AdaptiveTradingSystem:
             raise ValueError("model_error deve essere finito.")
 
         with self._lock:
-            forecasts = self._pending.get(cycle_id)
-            if forecasts is None:
+            pending = self._pending.get(cycle_id)
+            if pending is None:
                 raise ValueError(f"cycle_id sconosciuto o già chiuso: {cycle_id}")
+            forecasts, regime = pending
 
             self.journal.record_outcome(
                 cycle_id,
@@ -360,6 +371,7 @@ class AdaptiveTradingSystem:
                     forecast,
                     realized,
                     total_cost,
+                    regime,
                 )
                 for forecast in forecasts
             }

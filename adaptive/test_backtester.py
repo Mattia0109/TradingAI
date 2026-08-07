@@ -32,6 +32,7 @@ def test_backtest_is_paper_only_and_returns_aligned_outputs() -> None:
     assert np.isfinite(result.equal_weight_total_return)
     assert not result.forecast_observations.empty
     assert "META_MODEL" in result.strategy_diagnostics.index
+    assert result.learning_states.empty
 
 
 def test_future_price_change_cannot_change_past_results() -> None:
@@ -61,6 +62,7 @@ def test_backtest_cli_defaults_are_explicit_and_paper_oriented() -> None:
     assert args.period == "5y"
     assert args.rebalance_every == 5
     assert args.cost_bps == 5.0
+    assert args.no_challenger_comparison is False
 
 
 def test_drawdown_is_measured_from_initial_capital_too() -> None:
@@ -85,3 +87,26 @@ def test_forecast_outcomes_never_use_partial_horizons() -> None:
         result.forecast_observations["outcome_date"]
         <= result.daily_returns.index[-1]
     ).all()
+
+
+def test_static_mode_does_not_learn_from_future_outcomes() -> None:
+    result = AdaptiveBacktester(
+        config=AdaptiveBacktestConfig(online_regime_learning=False)
+    ).run({"SPY": market()})
+    assert result.learning_states.empty
+    assert result.quarantine_events == 0
+
+
+def test_learning_purges_overlapping_forecast_horizons() -> None:
+    purged = AdaptiveBacktester(
+        config=AdaptiveBacktestConfig(online_regime_learning=True)
+    ).run({"SPY": market(rows=220)})
+    unpurged = AdaptiveBacktester(
+        config=AdaptiveBacktestConfig(
+            online_regime_learning=True,
+            purge_overlapping_learning_outcomes=False
+        )
+    ).run({"SPY": market(rows=220)})
+    assert purged.learning_states["observations"].sum() < unpurged.learning_states[
+        "observations"
+    ].sum()

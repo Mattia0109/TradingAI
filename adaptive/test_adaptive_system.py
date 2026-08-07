@@ -10,7 +10,10 @@ import pytest
 from adaptive.execution_gate import EconomicExecutionGate
 from adaptive.feature_engine import AdaptiveFeatureEngine
 from adaptive.journal import SQLiteDecisionJournal
-from adaptive.learning import ControlledPerformanceTracker
+from adaptive.learning import (
+    CausalRegimePerformanceTracker,
+    ControlledPerformanceTracker,
+)
 from adaptive.meta_model import AdaptiveMetaModel
 from adaptive.models import (
     CycleStatus,
@@ -263,6 +266,24 @@ def test_learning_uses_only_recorded_outcomes_and_is_bounded() -> None:
     assert result.cycle_id not in system.pending_cycle_ids
     with pytest.raises(ValueError, match="già chiuso"):
         system.record_outcome(result.cycle_id, realized_asset_return=0.01)
+
+
+def test_record_outcome_preserves_the_decision_regime() -> None:
+    tracker = CausalRegimePerformanceTracker()
+    system = AdaptiveTradingSystem(
+        strategies=(LongStrategy(),),
+        performance_tracker=tracker,
+    )
+    result = system.analyze_snapshot(
+        make_snapshot(),
+        empty_portfolio(),
+        execution_estimate=cheap_execution(),
+    )
+    states = system.record_outcome(
+        result.cycle_id,
+        realized_asset_return=0.02,
+    )
+    assert states["test_long"].regime is result.regime.primary
 
 
 def test_universe_analysis_isolates_bad_assets() -> None:
