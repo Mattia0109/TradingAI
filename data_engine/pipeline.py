@@ -6,8 +6,8 @@ from data_engine.normalizer import DataNormalizer
 
 class MarketDataPipeline:
     """
-    Pipeline completa per ottenere dati
-    di mercato normalizzati.
+    Recupera, pulisce e normalizza
+    dati di mercato Yahoo Finance.
     """
 
     def __init__(self):
@@ -19,139 +19,164 @@ class MarketDataPipeline:
 
     def clean_yahoo_data(self, data):
         """
-        Pulisce i dati Yahoo Finance
-        per analisi tecniche e indicatori.
+        Converte i dati Yahoo in un DataFrame
+        standard con colonne minuscole.
         """
 
-        if data.empty:
+        if data is None or data.empty:
             return None
 
+        cleaned = data.copy()
 
-        # Gestione MultiIndex Yahoo Finance
-
-        if isinstance(data.columns, pd.MultiIndex):
-
-            data.columns = [
+        if isinstance(
+            cleaned.columns,
+            pd.MultiIndex
+        ):
+            cleaned.columns = [
                 column[0]
-                for column in data.columns
+                for column in cleaned.columns
             ]
 
-
-        # Rimuove Adjusted Close
-        # perché utilizziamo Close
-
-        if "Adj Close" in data.columns:
-
-            data = data.drop(
+        if "Adj Close" in cleaned.columns:
+            cleaned = cleaned.drop(
                 columns=["Adj Close"]
             )
 
+        cleaned = cleaned.reset_index()
 
-        # Porta la data da indice a colonna
-
-        data = data.reset_index()
-
-
-        # Normalizza i nomi colonne
-
-        data.columns = [
+        cleaned.columns = [
             str(column)
             .lower()
             .strip()
-            for column in data.columns
+            for column in cleaned.columns
         ]
 
+        if (
+            "datetime" in cleaned.columns
+            and "date" not in cleaned.columns
+        ):
+            cleaned = cleaned.rename(
+                columns={
+                    "datetime": "date"
+                }
+            )
 
-        return data
+        required_columns = [
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume"
+        ]
 
+        missing_columns = [
+            column
+            for column in required_columns
+            if column not in cleaned.columns
+        ]
+
+        if missing_columns:
+            raise ValueError(
+                "Colonne Yahoo mancanti: "
+                f"{missing_columns}. "
+                f"Ricevute: {list(cleaned.columns)}"
+            )
+
+        cleaned = cleaned[
+            required_columns
+        ].copy()
+
+        cleaned["date"] = pd.to_datetime(
+            cleaned["date"],
+            errors="coerce"
+        )
+
+        numeric_columns = [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume"
+        ]
+
+        for column in numeric_columns:
+            cleaned[column] = pd.to_numeric(
+                cleaned[column],
+                errors="coerce"
+            )
+
+        cleaned = cleaned.dropna(
+            subset=[
+                "date",
+                "open",
+                "high",
+                "low",
+                "close"
+            ]
+        )
+
+        cleaned = cleaned.sort_values(
+            "date"
+        ).reset_index(
+            drop=True
+        )
+
+        return cleaned
 
 
     def get_market_data(self, ticker):
         """
-        Recupera l'ultima candela disponibile
-        e la normalizza per il sistema.
+        Restituisce l'ultima candela normalizzata.
         """
 
         history = self.provider.get_history(
-            ticker,
+            ticker=ticker,
             period="5d",
             interval="1d"
         )
 
-
-        if history.empty:
-
+        if history is None or history.empty:
             return None
 
-
-        # Gestione MultiIndex Yahoo
-
-        if isinstance(history.columns, pd.MultiIndex):
-
+        if isinstance(
+            history.columns,
+            pd.MultiIndex
+        ):
             history.columns = [
                 column[0]
                 for column in history.columns
             ]
 
-
-        # NON convertiamo i nomi in minuscolo
-        # perché DataNormalizer usa:
-        # Open, High, Low, Close, Volume
-
         latest = history.iloc[-1]
 
-
-        normalized = self.normalizer.normalize_candle(
+        return self.normalizer.normalize_candle(
             ticker,
             latest
         )
 
 
-        return normalized
-
-
-
-    def get_historical_data(self, ticker):
+    def get_historical_data(
+        self,
+        ticker,
+        period="6mo",
+        interval="1d"
+    ):
         """
-        Recupera storico OHLCV pulito
-        per indicatori, strategie e analisi.
+        Restituisce storico OHLCV configurabile.
+
+        Esempi:
+        - period='6mo', interval='1d'
+        - period='60d', interval='5m'
+        - period='30d', interval='15m'
         """
 
         history = self.provider.get_history(
-            ticker,
-            period="6mo",
-            interval="1d"
+            ticker=ticker,
+            period=period,
+            interval=interval
         )
 
-
-        history = self.clean_yahoo_data(
+        return self.clean_yahoo_data(
             history
         )
-
-
-        if history is None:
-
-            return None
-
-
-
-        required_columns = [
-            "close",
-            "high",
-            "low",
-            "open",
-            "volume"
-        ]
-
-
-        for column in required_columns:
-
-            if column not in history.columns:
-
-                raise ValueError(
-                    f"Colonna mancante: {column}. "
-                    f"Ricevute: {list(history.columns)}"
-                )
-
-
-        return history
