@@ -9,8 +9,9 @@ class MultiAssetTimeSeriesMomentumStrategy:
     Strategia multi-asset Time-Series Momentum.
 
     Il segnale combina più orizzonti temporali.
-    Ogni rendimento viene normalizzato per la
-    volatilità realizzata sul relativo orizzonte.
+    I componenti possono usare rendimenti
+    normalizzati oppure trend lineari significativi
+    con errore standard Newey-West.
 
     Questa classe genera target direzionali.
     Non apre direttamente operazioni.
@@ -40,7 +41,10 @@ class MultiAssetTimeSeriesMomentumStrategy:
         component_clip=1.0,
         minimum_annualized_volatility=0.01,
         maximum_annualized_volatility=3.0,
-        minimum_history=None
+        minimum_history=None,
+        signal_sizing="continuous",
+        component_method="return",
+        trend_significance_threshold=2.0
     ):
         selected_weights = (
             dict(lookback_weights)
@@ -130,6 +134,51 @@ class MultiAssetTimeSeriesMomentumStrategy:
                 "superare il minimo."
             )
 
+        normalized_signal_sizing = (
+            str(signal_sizing)
+            .lower()
+            .strip()
+        )
+
+        if normalized_signal_sizing not in {
+            "continuous",
+            "directional"
+        }:
+            raise ValueError(
+                "signal_sizing deve essere continuous "
+                "oppure directional."
+            )
+
+        normalized_component_method = (
+            str(component_method)
+            .lower()
+            .strip()
+        )
+
+        if normalized_component_method not in {
+            "return",
+            "linear_trend"
+        }:
+            raise ValueError(
+                "component_method deve essere return "
+                "oppure linear_trend."
+            )
+
+        trend_significance_threshold = float(
+            trend_significance_threshold
+        )
+
+        if (
+            not math.isfinite(
+                trend_significance_threshold
+            )
+            or trend_significance_threshold <= 0
+        ):
+            raise ValueError(
+                "trend_significance_threshold deve essere "
+                "positivo e finito."
+            )
+
         calculated_minimum_history = max(
             max(
                 self.lookback_weights
@@ -176,6 +225,18 @@ class MultiAssetTimeSeriesMomentumStrategy:
 
         self.maximum_annualized_volatility = float(
             maximum_annualized_volatility
+        )
+
+        self.signal_sizing = (
+            normalized_signal_sizing
+        )
+
+        self.component_method = (
+            normalized_component_method
+        )
+
+        self.trend_significance_threshold = (
+            trend_significance_threshold
         )
 
         self.minimum_history = int(
@@ -393,6 +454,197 @@ class MultiAssetTimeSeriesMomentumStrategy:
         )
 
 
+    @staticmethod
+    def calculate_linear_trend_t_statistic(
+        close_prices,
+        lookback
+    ):
+        price_path = np.asarray(
+            close_prices.iloc[
+                -lookback - 1:
+            ],
+            dtype=float
+        )
+
+        observation_count = len(
+            price_path
+        )
+
+        if observation_count < 3:
+            return 0.0
+
+        normalized_path = (
+            price_path
+            /
+            price_path[0]
+        )
+
+        time_axis = np.arange(
+            observation_count,
+            dtype=float
+        )
+
+        time_axis -= float(
+            time_axis.mean()
+        )
+
+        design = np.column_stack(
+            [
+                np.ones(
+                    observation_count,
+                    dtype=float
+                ),
+                time_axis
+            ]
+        )
+
+        inverse_information = np.linalg.pinv(
+            design.T
+            @
+            design
+        )
+
+        coefficients = (
+            inverse_information
+            @
+            design.T
+            @
+            normalized_path
+        )
+
+        residuals = (
+            normalized_path
+            -
+            design
+            @
+            coefficients
+        )
+
+        scores = (
+            design
+            *
+            residuals[:, None]
+        )
+
+        covariance_meat = (
+            scores.T
+            @
+            scores
+        )
+
+        maximum_lag = int(
+            math.floor(
+                4
+                *
+                (
+                    observation_count
+                    /
+                    100
+                ) ** (
+                    2
+                    /
+                    9
+                )
+            )
+        )
+
+        maximum_lag = min(
+            max(
+                maximum_lag,
+                1
+            ),
+            observation_count - 1
+        )
+
+        for lag in range(
+            1,
+            maximum_lag + 1
+        ):
+            weight = (
+                1
+                -
+                lag
+                /
+                (
+                    maximum_lag
+                    +
+                    1
+                )
+            )
+
+            lagged_covariance = (
+                scores[lag:].T
+                @
+                scores[:-lag]
+            )
+
+            covariance_meat += (
+                weight
+                *
+                (
+                    lagged_covariance
+                    +
+                    lagged_covariance.T
+                )
+            )
+
+        covariance = (
+            inverse_information
+            @
+            covariance_meat
+            @
+            inverse_information
+        )
+
+        covariance *= (
+            observation_count
+            /
+            (
+                observation_count
+                -
+                design.shape[1]
+            )
+        )
+
+        slope = float(
+            coefficients[1]
+        )
+
+        slope_variance = max(
+            float(
+                covariance[1, 1]
+            ),
+            0.0
+        )
+
+        if slope_variance <= np.finfo(float).eps:
+            if abs(slope) <= np.finfo(float).eps:
+                return 0.0
+
+            return float(
+                math.copysign(
+                    100.0,
+                    slope
+                )
+            )
+
+        statistic = (
+            slope
+            /
+            math.sqrt(
+                slope_variance
+            )
+        )
+
+        return float(
+            np.clip(
+                statistic,
+                -100.0,
+                100.0
+            )
+        )
+
+
     def build_flat_result(
         self,
         ticker,
@@ -406,6 +658,8 @@ class MultiAssetTimeSeriesMomentumStrategy:
             "ticker": ticker,
             "asset_class": asset_class,
             "strategy": self.name,
+            "signal_sizing": self.signal_sizing,
+            "component_method": self.component_method,
             "action": "FLAT",
             "signal": 0.0,
             "strength": 0.0,
@@ -498,15 +752,47 @@ class MultiAssetTimeSeriesMomentumStrategy:
                 self.lookback_weights.items()
             )
         ):
-            component = (
-                self.calculate_component(
+            trend_t_statistic = None
+
+            if (
+                self.component_method
+                ==
+                "linear_trend"
+            ):
+                trend_t_statistic = (
+                    self.calculate_linear_trend_t_statistic(
+                        close_prices=(
+                            close_prices
+                        ),
+                        lookback=lookback
+                    )
+                )
+
+                if (
+                    trend_t_statistic
+                    >
+                    self.trend_significance_threshold
+                ):
+                    component = 1.0
+
+                elif (
+                    trend_t_statistic
+                    <
+                    -self.trend_significance_threshold
+                ):
+                    component = -1.0
+
+                else:
+                    component = 0.0
+
+            else:
+                component = self.calculate_component(
                     close_prices=close_prices,
                     lookback=lookback,
                     annualized_volatility=(
                         annualized_volatility
                     )
                 )
-            )
 
             components[
                 str(lookback)
@@ -515,6 +801,9 @@ class MultiAssetTimeSeriesMomentumStrategy:
                 "weight": weight,
                 "normalized_momentum": (
                     component
+                ),
+                "trend_t_statistic": (
+                    trend_t_statistic
                 ),
                 "weighted_contribution": (
                     component
@@ -558,9 +847,7 @@ class MultiAssetTimeSeriesMomentumStrategy:
 
         elif weighted_signal > 0:
             action = "LONG"
-            effective_signal = (
-                weighted_signal
-            )
+            effective_signal = 1.0
 
             reasons = [
                 (
@@ -571,9 +858,7 @@ class MultiAssetTimeSeriesMomentumStrategy:
 
         else:
             action = "SHORT"
-            effective_signal = (
-                weighted_signal
-            )
+            effective_signal = -1.0
 
             reasons = [
                 (
@@ -581,6 +866,17 @@ class MultiAssetTimeSeriesMomentumStrategy:
                     "su più orizzonti."
                 )
             ]
+
+        if (
+            action != "FLAT"
+            and
+            self.signal_sizing
+            ==
+            "continuous"
+        ):
+            effective_signal = (
+                weighted_signal
+            )
 
         if action == "FLAT":
             strength = 0.0
@@ -610,6 +906,8 @@ class MultiAssetTimeSeriesMomentumStrategy:
                 normalized_asset_class
             ),
             "strategy": self.name,
+            "signal_sizing": self.signal_sizing,
+            "component_method": self.component_method,
             "action": action,
             "signal": float(
                 effective_signal

@@ -647,15 +647,28 @@ class PortfolioRiskAllocator:
                 )
             )
 
-            if (
-                abs(
-                    target
-                    -
-                    previous
-                )
+            difference = abs(
+                target
+                -
+                previous
+            )
+
+            same_direction = (
+                target
+                *
+                previous
+                > 0
+            )
+
+            preserve_position = (
+                same_direction
+                and
+                difference
                 <
                 self.turnover_buffer
-            ):
+            )
+
+            if preserve_position:
                 adjusted[ticker] = (
                     previous
                 )

@@ -229,6 +229,32 @@ def test_turnover_buffer_preserves_small_change():
     )
 
 
+def test_turnover_buffer_does_not_delay_position_changes():
+
+    allocator = PortfolioRiskAllocator(
+        turnover_buffer=0.01
+    )
+
+    adjusted = allocator.apply_turnover_buffer(
+        target_weights={
+            "CLOSE": 0.0,
+            "OPEN": 0.004,
+            "REVERSE": -0.09
+        },
+        previous_weights={
+            "CLOSE": 0.004,
+            "OPEN": 0.0,
+            "REVERSE": 0.10
+        }
+    )
+
+    assert adjusted == {
+        "CLOSE": pytest.approx(0.0),
+        "OPEN": pytest.approx(0.004),
+        "REVERSE": pytest.approx(-0.09)
+    }
+
+
 def test_drawdown_kill_switch_closes_positions():
 
     allocator = PortfolioRiskAllocator(

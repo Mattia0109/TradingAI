@@ -70,13 +70,61 @@ def parse_arguments():
     )
 
     parser.add_argument(
+        "--signal-sizing",
+        choices=[
+            "continuous",
+            "directional"
+        ],
+        default="directional",
+        help=(
+            "Dimensionamento del segnale TSMOM. "
+            "Directional usa solo la direzione e lascia "
+            "il rischio all'allocatore."
+        )
+    )
+
+    parser.add_argument(
+        "--signal-method",
+        choices=[
+            "return",
+            "linear_trend"
+        ],
+        default="linear_trend",
+        help=(
+            "Metodo dei componenti TSMOM. Linear trend "
+            "opera solo su trend statisticamente significativi."
+        )
+    )
+
+    parser.add_argument(
+        "--trend-significance-threshold",
+        type=float,
+        default=2.0,
+        help=(
+            "Soglia assoluta del t-stat Newey-West per il "
+            "metodo linear_trend. Default: 2.0."
+        )
+    )
+
+    parser.add_argument(
+        "--signal-threshold",
+        type=float,
+        default=0.15,
+        help=(
+            "Forza minima del segnale aggregato. "
+            "Default: 0.15."
+        )
+    )
+
+    parser.add_argument(
         "--maximum-resize-cost-ratio",
         type=float,
-        default=0.0025,
+        default=None,
         help=(
             "Costo massimo accettato per un piccolo aumento "
             "della stessa posizione, espresso come quota "
-            "del nozionale dell'ordine."
+            "del nozionale dell'ordine. Disabilitato per "
+            "default perché il filtro è asimmetrico."
         )
     )
 
@@ -575,8 +623,19 @@ def main():
                 },
                 volatility_span=60,
                 annualization_factor=252,
-                no_trade_threshold=0.15,
-                component_clip=1.0
+                no_trade_threshold=(
+                    args.signal_threshold
+                ),
+                component_clip=1.0,
+                signal_sizing=(
+                    args.signal_sizing
+                ),
+                component_method=(
+                    args.signal_method
+                ),
+                trend_significance_threshold=(
+                    args.trend_significance_threshold
+                )
             )
         )
 

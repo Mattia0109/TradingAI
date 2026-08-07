@@ -10,6 +10,9 @@ from backtesting.multi_asset_research import (
 from backtesting.portfolio_risk_allocator import (
     PortfolioRiskAllocator
 )
+from backtesting.run_multi_asset_research import (
+    parse_arguments
+)
 from strategies.multi_asset_tsmom import (
     MultiAssetTimeSeriesMomentumStrategy
 )
@@ -107,6 +110,34 @@ def create_asset_classes():
         "TLT": "BOND",
         "BTC-USD": "CRYPTO"
     }
+
+
+def test_research_cli_uses_sparse_trend_defaults(
+    monkeypatch
+):
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run_multi_asset_research"
+        ]
+    )
+
+    arguments = parse_arguments()
+
+    assert arguments.signal_method == (
+        "linear_trend"
+    )
+
+    assert arguments.signal_sizing == (
+        "directional"
+    )
+
+    assert arguments.signal_threshold == (
+        pytest.approx(0.15)
+    )
+
+    assert arguments.maximum_resize_cost_ratio is None
 
 
 class AlwaysLongStrategy:
@@ -533,8 +564,20 @@ def test_complete_benchmark_runs():
         ][
             "maximum_resize_cost_ratio"
         ]
+        is None
+        for item in result[
+            "tsmom_results"
+        ]
+    )
+
+    assert all(
+        item[
+            "settings"
+        ][
+            "strategy_component_method"
+        ]
         ==
-        pytest.approx(0.0025)
+        "return"
         for item in result[
             "tsmom_results"
         ]
