@@ -30,6 +30,8 @@ def test_backtest_is_paper_only_and_returns_aligned_outputs() -> None:
     assert np.isfinite(result.total_return)
     assert 0.0 <= result.invested_fraction <= 1.0
     assert np.isfinite(result.equal_weight_total_return)
+    assert not result.forecast_observations.empty
+    assert "META_MODEL" in result.strategy_diagnostics.index
 
 
 def test_future_price_change_cannot_change_past_results() -> None:
@@ -74,3 +76,12 @@ def test_date_column_becomes_the_reported_calendar() -> None:
     assert result.daily_returns.index.tz is not None
     assert result.decision_count > 0
     assert result.analysis_error_count == 0
+
+
+def test_forecast_outcomes_never_use_partial_horizons() -> None:
+    result = AdaptiveBacktester().run({"SPY": market(rows=100)})
+    assert result.forecast_observations["realized_return"].notna().all()
+    assert (
+        result.forecast_observations["outcome_date"]
+        <= result.daily_returns.index[-1]
+    ).all()
