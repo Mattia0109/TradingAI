@@ -272,6 +272,44 @@ def test_drawdown_kill_switch_closes_positions():
     )
 
 
+def test_severe_drawdown_preserves_recovery_exposure_until_kill_switch():
+
+    allocator = PortfolioRiskAllocator(
+        drawdown_kill_switch=0.20
+    )
+
+    multiplier = allocator.calculate_drawdown_multiplier(
+        0.199999
+    )
+
+    assert multiplier >= 0.25
+
+    result = allocator.allocate(
+        signals=[
+            build_signal(
+                "SPY",
+                "LONG",
+                1.0,
+                0.20,
+                "EQUITY"
+            )
+        ],
+        current_drawdown=0.199999
+    )
+
+    assert result[
+        "kill_switch_active"
+    ] is False
+
+    assert result[
+        "gross_exposure"
+    ] > 0
+
+    assert allocator.calculate_drawdown_multiplier(
+        0.20
+    ) == 0
+
+
 def test_flat_and_invalid_signals_are_rejected():
 
     allocator = PortfolioRiskAllocator()
