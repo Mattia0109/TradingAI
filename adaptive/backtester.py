@@ -11,6 +11,7 @@ import pandas as pd
 
 from adaptive.journal import SQLiteDecisionJournal
 from adaptive.diagnostics import summarize_forecasts
+from adaptive.learning import CausalRegimePerformanceTracker
 from adaptive.models import PortfolioState
 from adaptive.orchestrator import AdaptiveTradingSystem
 
@@ -22,6 +23,8 @@ class AdaptiveBacktestConfig:
     cost_bps_per_turnover: float = 5.0
     annualization_factor: int = 252
     flatten_rejected_signals: bool = True
+    online_regime_learning: bool = False
+    purge_overlapping_learning_outcomes: bool = True
 
     def __post_init__(self) -> None:
         if self.initial_equity <= 0.0:
@@ -61,6 +64,8 @@ class AdaptiveBacktestResult:
     forecast_observations: pd.DataFrame
     strategy_diagnostics: pd.DataFrame
     strategy_regime_diagnostics: pd.DataFrame
+    learning_states: pd.DataFrame
+    quarantine_events: int
     paper_only: bool = True
 
 
@@ -68,8 +73,25 @@ class AdaptiveBacktester:
     """Decide alla chiusura t e applica il rendimento soltanto da t a t+1."""
 
     def __init__(self, system: AdaptiveTradingSystem | None = None, config: AdaptiveBacktestConfig | None = None) -> None:
-        self.system = system or AdaptiveTradingSystem(journal=SQLiteDecisionJournal(":memory:"))
         self.config = config or AdaptiveBacktestConfig()
+        if system is None:
+            tracker = (
+                CausalRegimePerformanceTracker()
+                if self.config.online_regime_learning
+                else None
+            )
+            system = AdaptiveTradingSystem(
+                journal=SQLiteDecisionJournal(":memory:"),
+                performance_tracker=tracker,
+            )
+        self.system = system
+        self._online_learning_enabled = (
+            self.config.online_regime_learning
+            and isinstance(
+                self.system.performance_tracker,
+                CausalRegimePerformanceTracker,
+            )
+        )
         if not self.system.paper_only:
             raise ValueError("Il backtester accetta soltanto sistemi paper-only.")
 
@@ -138,12 +160,41 @@ class AdaptiveBacktester:
         decision_count = 0
         analysis_error_count = 0
         forecast_records: list[dict[str, object]] = []
+        pending_learning: list[dict[str, object]] = []
+        quarantine_events = 0
 
         for offset in range(minimum - 1, len(dates) - 1):
             date, next_date = dates[offset], dates[offset + 1]
             turnover = 0.0
             status_row: dict[str, str] = {}
             if (offset - minimum + 1) % self.config.rebalance_every == 0:
+                if self._online_learning_enabled:
+                    still_pending: list[dict[str, object]] = []
+                    for pending in pending_learning:
+                        if int(pending["matures_at"]) > offset:
+                            still_pending.append(pending)
+                            continue
+                        forecast = pending["forecast"]
+                        ticker = str(pending["ticker"])
+                        start_date = dates[int(pending["decision_offset"])]
+                        maturity_date = dates[int(pending["matures_at"])]
+                        realized = float(
+                            data[ticker].loc[maturity_date, "close"]
+                            / data[ticker].loc[start_date, "close"]
+                            - 1.0
+                        )
+                        previous = self.system.performance_tracker.state(
+                            forecast.strategy_id, pending["regime"]
+                        )
+                        updated = self.system.performance_tracker.update(
+                            forecast,
+                            realized,
+                            float(pending["estimated_cost_bps"]) / 10_000.0,
+                            pending["regime"],
+                        )
+                        if updated.quarantined and not previous.quarantined:
+                            quarantine_events += 1
+                    pending_learning = still_pending
                 history = {ticker: frame.loc[:date] for ticker, frame in data.items()}
                 portfolio = self._portfolio(equity, peak, weights, classes)
                 analysis = self.system.analyze_universe(history, portfolio, asset_classes=classes)
@@ -175,6 +226,35 @@ class AdaptiveBacktester:
                                 "estimated_cost_bps": estimated_cost,
                             }
                         )
+                        if (
+                            self._online_learning_enabled
+                            and forecast.direction.sign != 0
+                            and offset + forecast.horizon_bars < len(dates)
+                        ):
+                            learning_key = (
+                                ticker,
+                                forecast.strategy_id,
+                                cycle.regime.primary,
+                            )
+                            overlaps = any(
+                                pending.get("learning_key") == learning_key
+                                for pending in pending_learning
+                            )
+                            if (
+                                not self.config.purge_overlapping_learning_outcomes
+                                or not overlaps
+                            ):
+                                pending_learning.append(
+                                    {
+                                        "decision_offset": offset,
+                                        "matures_at": offset + forecast.horizon_bars,
+                                        "ticker": ticker,
+                                        "forecast": forecast,
+                                        "regime": cycle.regime.primary,
+                                        "estimated_cost_bps": estimated_cost,
+                                        "learning_key": learning_key,
+                                    }
+                                )
                     forecast_records.append(
                         {
                             "decision_offset": offset,
@@ -278,6 +358,20 @@ class AdaptiveBacktester:
         observations, strategy_diagnostics, regime_diagnostics = (
             summarize_forecasts(matured_records)
         )
+        tracker_states = getattr(self.system.performance_tracker, "states", None)
+        learning_states = pd.DataFrame(
+            [
+                {
+                    "strategy_id": state.strategy_id,
+                    "regime": state.regime.value,
+                    "observations": state.observations,
+                    "ewma_utility": state.ewma_utility,
+                    "weight": state.weight,
+                    "quarantined": state.quarantined,
+                }
+                for state in (tracker_states() if tracker_states else ())
+            ]
+        )
         return AdaptiveBacktestResult(
             equity_curve=curve, daily_returns=returns,
             weights=weight_frame,
@@ -299,4 +393,6 @@ class AdaptiveBacktester:
             forecast_observations=observations,
             strategy_diagnostics=strategy_diagnostics,
             strategy_regime_diagnostics=regime_diagnostics,
+            learning_states=learning_states,
+            quarantine_events=quarantine_events,
         )
