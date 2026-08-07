@@ -461,6 +461,29 @@ class MultiAssetBacktester:
 
 
     @staticmethod
+    def should_rearm_risk_peak(
+        allocation,
+        portfolio
+    ):
+        if not isinstance(
+            allocation,
+            dict
+        ):
+            return False
+
+        return (
+            bool(
+                allocation.get(
+                    "kill_switch_active",
+                    False
+                )
+            )
+            and
+            portfolio.is_flat
+        )
+
+
+    @staticmethod
     def calculate_performance_metrics(
         equity_curve,
         initial_capital,
@@ -793,6 +816,7 @@ class MultiAssetBacktester:
         )
 
         rebalance_count = 0
+        risk_peak_reset_count = 0
 
         for index, timestamp in enumerate(
             price_panel.index
@@ -827,6 +851,29 @@ class MultiAssetBacktester:
                         reason="SCHEDULED_REBALANCE"
                     )
                 )
+
+                risk_peak_rearmed = (
+                    self.should_rearm_risk_peak(
+                        allocation=(
+                            pending_allocation.get(
+                                "allocation",
+                                {}
+                            )
+                        ),
+                        portfolio=portfolio
+                    )
+                )
+
+                if risk_peak_rearmed:
+                    peak_equity = float(
+                        portfolio.equity
+                    )
+
+                    risk_peak_reset_count += 1
+
+                rebalance_result[
+                    "risk_peak_rearmed"
+                ] = risk_peak_rearmed
 
                 rebalance_history.append(
                     rebalance_result
@@ -1052,6 +1099,9 @@ class MultiAssetBacktester:
             ),
             "pending_allocation_at_end": (
                 pending_allocation
+            ),
+            "risk_peak_reset_count": (
+                risk_peak_reset_count
             ),
             "bankrupt": portfolio.bankrupt
         }
