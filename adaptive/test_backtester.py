@@ -72,3 +72,5 @@ def test_date_column_becomes_the_reported_calendar() -> None:
     result = AdaptiveBacktester().run({"SPY": market_with_date_column()})
     assert isinstance(result.daily_returns.index, pd.DatetimeIndex)
     assert result.daily_returns.index.tz is not None
+    assert result.decision_count > 0
+    assert result.analysis_error_count == 0

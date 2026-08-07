@@ -45,6 +45,7 @@ def main(argv=None) -> int:
     print(f"Turnover totale:        {result.total_turnover:10.2f}")
     print(f"Costo cumulato stimato: {result.total_cost_return:10.2%}")
     print(f"Decisioni simulate:     {result.decision_count:10d}")
+    print(f"Errori analisi isolati: {result.analysis_error_count:10d}")
     print(f"Esposizione gross media:{result.average_gross_exposure:10.2%}")
     print(f"Esposizione net media:  {result.average_net_exposure:10.2%}")
     print(f"Tempo investito:        {result.invested_fraction:10.2%}")

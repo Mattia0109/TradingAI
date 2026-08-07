@@ -49,6 +49,7 @@ class AdaptiveBacktestResult:
     total_turnover: float
     total_cost_return: float
     decision_count: int
+    analysis_error_count: int
     average_gross_exposure: float
     average_net_exposure: float
     invested_fraction: float
@@ -84,6 +85,7 @@ class AdaptiveBacktester:
             if "date" in clean.columns:
                 clean["date"] = pd.to_datetime(clean["date"], errors="coerce", utc=True)
                 clean = clean.dropna(subset=["date"]).set_index("date", drop=False)
+                clean.index.name = None
             elif isinstance(clean.index, pd.DatetimeIndex):
                 clean.index = pd.to_datetime(clean.index, utc=True)
             clean = clean.sort_index()
@@ -130,6 +132,7 @@ class AdaptiveBacktester:
         weight_rows: list[dict[str, float]] = []
         status_rows: list[dict[str, str]] = []
         decision_count = 0
+        analysis_error_count = 0
 
         for offset in range(minimum - 1, len(dates) - 1):
             date, next_date = dates[offset], dates[offset + 1]
@@ -139,6 +142,15 @@ class AdaptiveBacktester:
                 history = {ticker: frame.loc[:date] for ticker, frame in data.items()}
                 portfolio = self._portfolio(equity, peak, weights, classes)
                 analysis = self.system.analyze_universe(history, portfolio, asset_classes=classes)
+                analysis_error_count += len(analysis.errors)
+                if not analysis.cycles:
+                    details = "; ".join(
+                        f"{ticker}: {error}"
+                        for ticker, error in sorted(analysis.errors.items())
+                    )
+                    raise RuntimeError(
+                        "Nessun asset analizzabile durante il backtest. " + details
+                    )
                 status_row = {ticker: cycle.status.value for ticker, cycle in analysis.cycles.items()}
                 targets = dict(weights)
                 if self.config.flatten_rejected_signals:
@@ -217,6 +229,7 @@ class AdaptiveBacktester:
             sharpe=sharpe, max_drawdown=max_drawdown,
             total_turnover=float(np.sum(turnovers)), total_cost_return=float(np.sum(costs)),
             decision_count=decision_count,
+            analysis_error_count=analysis_error_count,
             average_gross_exposure=float(gross_series.mean()),
             average_net_exposure=float(net_series.mean()),
             invested_fraction=float((gross_series > 1e-12).mean()),
