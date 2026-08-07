@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from adaptive.journal import SQLiteDecisionJournal
+from adaptive.diagnostics import summarize_forecasts
 from adaptive.models import PortfolioState
 from adaptive.orchestrator import AdaptiveTradingSystem
 
@@ -57,6 +58,9 @@ class AdaptiveBacktestResult:
     equal_weight_cagr: float
     equal_weight_sharpe: float
     equal_weight_max_drawdown: float
+    forecast_observations: pd.DataFrame
+    strategy_diagnostics: pd.DataFrame
+    strategy_regime_diagnostics: pd.DataFrame
     paper_only: bool = True
 
 
@@ -133,6 +137,7 @@ class AdaptiveBacktester:
         status_rows: list[dict[str, str]] = []
         decision_count = 0
         analysis_error_count = 0
+        forecast_records: list[dict[str, object]] = []
 
         for offset in range(minimum - 1, len(dates) - 1):
             date, next_date = dates[offset], dates[offset + 1]
@@ -152,6 +157,39 @@ class AdaptiveBacktester:
                         "Nessun asset analizzabile durante il backtest. " + details
                     )
                 status_row = {ticker: cycle.status.value for ticker, cycle in analysis.cycles.items()}
+                for ticker, cycle in analysis.cycles.items():
+                    estimated_cost = cycle.execution_decision.estimated_cost_bps
+                    for forecast in cycle.forecasts:
+                        forecast_records.append(
+                            {
+                                "decision_offset": offset,
+                                "date": date,
+                                "ticker": ticker,
+                                "strategy_id": forecast.strategy_id,
+                                "regime": cycle.regime.primary.value,
+                                "direction": forecast.direction.value,
+                                "direction_sign": forecast.direction.sign,
+                                "confidence": forecast.confidence,
+                                "expected_return": forecast.expected_return,
+                                "horizon_bars": forecast.horizon_bars,
+                                "estimated_cost_bps": estimated_cost,
+                            }
+                        )
+                    forecast_records.append(
+                        {
+                            "decision_offset": offset,
+                            "date": date,
+                            "ticker": ticker,
+                            "strategy_id": "META_MODEL",
+                            "regime": cycle.regime.primary.value,
+                            "direction": cycle.meta_decision.direction.value,
+                            "direction_sign": cycle.meta_decision.direction.sign,
+                            "confidence": cycle.meta_decision.confidence,
+                            "expected_return": cycle.meta_decision.expected_return,
+                            "horizon_bars": cycle.meta_decision.horizon_bars,
+                            "estimated_cost_bps": estimated_cost,
+                        }
+                    )
                 targets = dict(weights)
                 if self.config.flatten_rejected_signals:
                     for ticker, cycle in analysis.cycles.items():
@@ -219,6 +257,27 @@ class AdaptiveBacktester:
             else 0.0
         )
         equal_drawdown = float((1.0 - equal_growth / equal_growth.cummax()).max())
+        matured_records: list[dict[str, object]] = []
+        for record in forecast_records:
+            target_offset = int(record["decision_offset"]) + int(record["horizon_bars"])
+            enriched = dict(record)
+            if target_offset < len(dates):
+                ticker = str(record["ticker"])
+                start_date = dates[int(record["decision_offset"])]
+                target_date = dates[target_offset]
+                enriched["realized_return"] = float(
+                    data[ticker].loc[target_date, "close"]
+                    / data[ticker].loc[start_date, "close"]
+                    - 1.0
+                )
+                enriched["outcome_date"] = target_date
+            else:
+                enriched["realized_return"] = np.nan
+                enriched["outcome_date"] = pd.NaT
+            matured_records.append(enriched)
+        observations, strategy_diagnostics, regime_diagnostics = (
+            summarize_forecasts(matured_records)
+        )
         return AdaptiveBacktestResult(
             equity_curve=curve, daily_returns=returns,
             weights=weight_frame,
@@ -237,4 +296,7 @@ class AdaptiveBacktester:
             equal_weight_cagr=equal_cagr,
             equal_weight_sharpe=equal_sharpe,
             equal_weight_max_drawdown=equal_drawdown,
+            forecast_observations=observations,
+            strategy_diagnostics=strategy_diagnostics,
+            strategy_regime_diagnostics=regime_diagnostics,
         )

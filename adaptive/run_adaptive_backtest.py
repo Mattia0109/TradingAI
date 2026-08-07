@@ -19,6 +19,7 @@ def parse_arguments(argv=None):
     parser.add_argument("--capital", type=float, default=10_000.0)
     parser.add_argument("--rebalance-every", type=int, default=5)
     parser.add_argument("--cost-bps", type=float, default=5.0)
+    parser.add_argument("--diagnostic-min-signals", type=int, default=20)
     return parser.parse_args(argv)
 
 
@@ -54,6 +55,25 @@ def main(argv=None) -> int:
     print(f"CAGR:                   {result.equal_weight_cagr:10.2%}")
     print(f"Sharpe:                 {result.equal_weight_sharpe:10.2f}")
     print(f"Max drawdown:           {result.equal_weight_max_drawdown:10.2%}")
+    print("\nDIAGNOSTICA PREDITTIVA PER MODELLO")
+    print(f"{'MODELLO':28} {'N':>6} {'HIT':>8} {'SIGNED':>10} {'NET':>10} {'MAE':>10} {'CORR':>8}")
+    for model, row in result.strategy_diagnostics.iterrows():
+        print(
+            f"{str(model):28} {int(row['signals']):6d} "
+            f"{row['hit_rate']:8.2%} {row['mean_signed_return']:10.3%} "
+            f"{row['mean_net_return']:10.3%} {row['mean_absolute_error']:10.3%} "
+            f"{row['forecast_correlation']:8.3f}"
+        )
+    print("\nDIAGNOSTICA MODELLO × REGIME")
+    print(f"{'MODELLO':25} {'REGIME':20} {'N':>6} {'HIT':>8} {'NET':>10} {'CORR':>8}")
+    for (model, regime), row in result.strategy_regime_diagnostics.iterrows():
+        if int(row["signals"]) < args.diagnostic_min_signals:
+            continue
+        print(
+            f"{str(model):25} {str(regime):20} {int(row['signals']):6d} "
+            f"{row['hit_rate']:8.2%} {row['mean_net_return']:10.3%} "
+            f"{row['forecast_correlation']:8.3f}"
+        )
     return 0
 
 
