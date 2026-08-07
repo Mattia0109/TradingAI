@@ -221,6 +221,7 @@ class ResearchMultiAssetBacktester(
 
         rebalance_count = 0
         first_execution_time = None
+        risk_peak_reset_count = 0
 
         for index, timestamp in enumerate(
             price_panel.index
@@ -255,6 +256,29 @@ class ResearchMultiAssetBacktester(
                         reason="SCHEDULED_REBALANCE"
                     )
                 )
+
+                risk_peak_rearmed = (
+                    self.should_rearm_risk_peak(
+                        allocation=(
+                            pending_allocation.get(
+                                "allocation",
+                                {}
+                            )
+                        ),
+                        portfolio=portfolio
+                    )
+                )
+
+                if risk_peak_rearmed:
+                    peak_equity = float(
+                        portfolio.equity
+                    )
+
+                    risk_peak_reset_count += 1
+
+                rebalance_result[
+                    "risk_peak_rearmed"
+                ] = risk_peak_rearmed
 
                 rebalance_history.append(
                     rebalance_result
@@ -516,6 +540,9 @@ class ResearchMultiAssetBacktester(
             ),
             "pending_allocation_at_end": (
                 pending_allocation
+            ),
+            "risk_peak_reset_count": (
+                risk_peak_reset_count
             ),
             "bankrupt": portfolio.bankrupt
         }
