@@ -109,23 +109,6 @@ class TradingPipeline:
 
         )
 
-
-
-        # Se non c'è un BUY/SELL,
-        # creiamo comunque un segnale neutro
-        # per permettere alla pipeline di completarsi
-
-        if decision["action"] not in [
-
-            "BUY",
-            "SELL"
-
-        ]:
-
-            decision["action"] = "BUY"
-
-
-
         latest = data.iloc[-1]
 
 
