@@ -226,3 +226,130 @@ def test_liquidation_closes_all_positions():
     assert len(
         liquidation["orders"]
     ) == 2
+
+
+def test_uneconomic_resize_is_batched_but_close_executes():
+
+    portfolio = MultiAssetPortfolio(
+        initial_capital=10000,
+        use_market_costs=True,
+        maximum_resize_cost_ratio=0.0025
+    )
+
+    portfolio.rebalance(
+        target_weights={
+            "AAPL": 0.10
+        },
+        prices={
+            "AAPL": 100
+        },
+        timestamp=pd.Timestamp(
+            "2025-01-01"
+        )
+    )
+
+    small_resize = portfolio.rebalance(
+        target_weights={
+            "AAPL": 0.12
+        },
+        prices={
+            "AAPL": 100
+        },
+        timestamp=pd.Timestamp(
+            "2025-01-02"
+        )
+    )
+
+    assert small_resize[
+        "orders"
+    ] == []
+
+    assert small_resize[
+        "uneconomic_resize_skips"
+    ] == 1
+
+    assert portfolio.positions[
+        "AAPL"
+    ] == 10
+
+    accumulated_resize = portfolio.rebalance(
+        target_weights={
+            "AAPL": 0.20
+        },
+        prices={
+            "AAPL": 100
+        },
+        timestamp=pd.Timestamp(
+            "2025-01-03"
+        )
+    )
+
+    assert len(
+        accumulated_resize[
+            "orders"
+        ]
+    ) == 1
+
+    risk_reduction = portfolio.rebalance(
+        target_weights={
+            "AAPL": 0.18
+        },
+        prices={
+            "AAPL": 100
+        },
+        timestamp=pd.Timestamp(
+            "2025-01-04"
+        )
+    )
+
+    assert len(
+        risk_reduction[
+            "orders"
+        ]
+    ) == 1
+
+    reduction_order = risk_reduction[
+        "orders"
+    ][0]
+
+    assert (
+        reduction_order[
+            "total_cost"
+        ]
+        /
+        reduction_order[
+            "trade_notional"
+        ]
+        >
+        0.0025
+    )
+
+    liquidation = portfolio.rebalance(
+        target_weights={
+            "AAPL": 0.0
+        },
+        prices={
+            "AAPL": 100
+        },
+        timestamp=pd.Timestamp(
+            "2025-01-05"
+        )
+    )
+
+    assert len(
+        liquidation[
+            "orders"
+        ]
+    ) == 1
+
+    assert portfolio.is_flat is True
+
+
+def test_invalid_maximum_resize_cost_ratio_is_rejected():
+
+    with pytest.raises(
+        ValueError
+    ):
+        MultiAssetPortfolio(
+            maximum_resize_cost_ratio=0.0
+        )
