@@ -15,6 +15,12 @@ def market(seed: int = 1, rows: int = 150) -> pd.DataFrame:
     return pd.DataFrame({"close": close, "volume": 1_000_000.0}, index=index)
 
 
+def market_with_date_column(seed: int = 1, rows: int = 150) -> pd.DataFrame:
+    frame = market(seed, rows).reset_index(names="date")
+    frame.index = pd.RangeIndex(len(frame))
+    return frame
+
+
 def test_backtest_is_paper_only_and_returns_aligned_outputs() -> None:
     result = AdaptiveBacktester(config=AdaptiveBacktestConfig(rebalance_every=5)).run({"SPY": market()})
     assert result.paper_only is True
@@ -22,6 +28,8 @@ def test_backtest_is_paper_only_and_returns_aligned_outputs() -> None:
     assert result.weights.index.equals(result.daily_returns.index)
     assert result.decision_count > 0
     assert np.isfinite(result.total_return)
+    assert 0.0 <= result.invested_fraction <= 1.0
+    assert np.isfinite(result.equal_weight_total_return)
 
 
 def test_future_price_change_cannot_change_past_results() -> None:
@@ -58,3 +66,9 @@ def test_drawdown_is_measured_from_initial_capital_too() -> None:
     falling["close"] = np.linspace(100.0, 50.0, len(falling))
     result = AdaptiveBacktester().run({"SPY": falling})
     assert 0.0 <= result.max_drawdown <= 1.0
+
+
+def test_date_column_becomes_the_reported_calendar() -> None:
+    result = AdaptiveBacktester().run({"SPY": market_with_date_column()})
+    assert isinstance(result.daily_returns.index, pd.DatetimeIndex)
+    assert result.daily_returns.index.tz is not None

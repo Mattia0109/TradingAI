@@ -49,6 +49,13 @@ class AdaptiveBacktestResult:
     total_turnover: float
     total_cost_return: float
     decision_count: int
+    average_gross_exposure: float
+    average_net_exposure: float
+    invested_fraction: float
+    equal_weight_total_return: float
+    equal_weight_cagr: float
+    equal_weight_sharpe: float
+    equal_weight_max_drawdown: float
     paper_only: bool = True
 
 
@@ -74,6 +81,11 @@ class AdaptiveBacktester:
             clean.columns = [str(column).lower().strip() for column in clean.columns]
             if "close" not in clean.columns:
                 raise ValueError(f"{ticker}: colonna close mancante.")
+            if "date" in clean.columns:
+                clean["date"] = pd.to_datetime(clean["date"], errors="coerce", utc=True)
+                clean = clean.dropna(subset=["date"]).set_index("date", drop=False)
+            elif isinstance(clean.index, pd.DatetimeIndex):
+                clean.index = pd.to_datetime(clean.index, utc=True)
             clean = clean.sort_index()
             clean = clean[~clean.index.duplicated(keep="last")]
             clean["close"] = pd.to_numeric(clean["close"], errors="coerce")
@@ -168,9 +180,36 @@ class AdaptiveBacktester:
         sharpe = float(returns.mean()) / std * math.sqrt(self.config.annualization_factor) if std > 0 else 0.0
         running_peak = curve.cummax().clip(lower=self.config.initial_equity)
         max_drawdown = float((1.0 - curve / running_peak).max()) if not curve.empty else 0.0
+        weight_frame = pd.DataFrame(weight_rows, index=output_dates).fillna(0.0)
+        gross_series = weight_frame.abs().sum(axis=1)
+        net_series = weight_frame.sum(axis=1)
+        equal_weight_returns = pd.Series(
+            [
+                np.mean(
+                    [
+                        float(frame.loc[next_date, "close"] / frame.loc[date, "close"] - 1.0)
+                        for frame in data.values()
+                    ]
+                )
+                for date, next_date in zip(dates[minimum - 1 : -1], dates[minimum:])
+            ],
+            index=output_dates,
+            dtype=float,
+        )
+        equal_growth = (1.0 + equal_weight_returns).cumprod()
+        equal_total = float(equal_growth.iloc[-1] - 1.0)
+        equal_cagr = float(equal_growth.iloc[-1] ** (1.0 / years) - 1.0)
+        equal_std = float(equal_weight_returns.std(ddof=1))
+        equal_sharpe = (
+            float(equal_weight_returns.mean()) / equal_std
+            * math.sqrt(self.config.annualization_factor)
+            if equal_std > 0.0
+            else 0.0
+        )
+        equal_drawdown = float((1.0 - equal_growth / equal_growth.cummax()).max())
         return AdaptiveBacktestResult(
             equity_curve=curve, daily_returns=returns,
-            weights=pd.DataFrame(weight_rows, index=output_dates).fillna(0.0),
+            weights=weight_frame,
             turnover=pd.Series(turnovers, index=output_dates, name="turnover"),
             costs=pd.Series(costs, index=output_dates, name="cost_return"),
             statuses=pd.DataFrame(status_rows, index=output_dates),
@@ -178,4 +217,11 @@ class AdaptiveBacktester:
             sharpe=sharpe, max_drawdown=max_drawdown,
             total_turnover=float(np.sum(turnovers)), total_cost_return=float(np.sum(costs)),
             decision_count=decision_count,
+            average_gross_exposure=float(gross_series.mean()),
+            average_net_exposure=float(net_series.mean()),
+            invested_fraction=float((gross_series > 1e-12).mean()),
+            equal_weight_total_return=equal_total,
+            equal_weight_cagr=equal_cagr,
+            equal_weight_sharpe=equal_sharpe,
+            equal_weight_max_drawdown=equal_drawdown,
         )

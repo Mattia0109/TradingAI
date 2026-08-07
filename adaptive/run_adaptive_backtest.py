@@ -45,6 +45,14 @@ def main(argv=None) -> int:
     print(f"Turnover totale:        {result.total_turnover:10.2f}")
     print(f"Costo cumulato stimato: {result.total_cost_return:10.2%}")
     print(f"Decisioni simulate:     {result.decision_count:10d}")
+    print(f"Esposizione gross media:{result.average_gross_exposure:10.2%}")
+    print(f"Esposizione net media:  {result.average_net_exposure:10.2%}")
+    print(f"Tempo investito:        {result.invested_fraction:10.2%}")
+    print("\nBENCHMARK EQUAL WEIGHT — STESSO PERIODO")
+    print(f"Rendimento totale:      {result.equal_weight_total_return:10.2%}")
+    print(f"CAGR:                   {result.equal_weight_cagr:10.2%}")
+    print(f"Sharpe:                 {result.equal_weight_sharpe:10.2f}")
+    print(f"Max drawdown:           {result.equal_weight_max_drawdown:10.2%}")
     return 0
 
 
