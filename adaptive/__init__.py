@@ -1,5 +1,11 @@
 """Fondazione paper-only del sistema TradingAI adattivo."""
 
+from adaptive.backtester import (
+    AdaptiveBacktestConfig,
+    AdaptiveBacktestResult,
+    AdaptiveBacktester,
+)
+
 from adaptive.models import (
     AdaptiveCycleResult,
     CycleStatus,
@@ -32,6 +38,9 @@ from adaptive.portfolio_allocator import (
 )
 
 __all__ = [
+    "AdaptiveBacktestConfig",
+    "AdaptiveBacktestResult",
+    "AdaptiveBacktester",
     "AdaptiveCycleResult",
     "AdaptiveSystemConfig",
     "AdaptiveTradingSystem",

@@ -87,9 +87,9 @@ def print_results(result, download_errors) -> None:
     print()
     print(
         f"{'TICKER':12} {'STATUS':20} {'REGIME':20} {'DIR':7} "
-        f"{'CONF':>8} {'TARGET':>9} {'EDGE NET':>10}"
+        f"{'CONF':>8} {'TARGET':>9} {'ORIZZ':>6} {'EDGE NET/H':>11}"
     )
-    print("-" * 94)
+    print("-" * 104)
 
     ordered = sorted(
         result.cycles.values(),
@@ -116,6 +116,7 @@ def print_results(result, download_errors) -> None:
             f"{cycle.meta_decision.direction.value:7} "
             f"{cycle.meta_decision.confidence:8.2%} "
             f"{(allocated_target or 0.0):9.2%} "
+            f"{cycle.meta_decision.horizon_bars:5d}b "
             f"{cycle.execution_decision.net_edge_bps:8.2f}bp"
         )
 
