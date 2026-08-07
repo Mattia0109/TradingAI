@@ -89,6 +89,10 @@ class ResearchCalendarAligner:
                 normalized.index
             )
 
+        normalized = normalized.reset_index(
+            drop=True
+        )
+
         normalized["date"] = pd.to_datetime(
             normalized["date"],
             errors="coerce",
