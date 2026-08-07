@@ -30,7 +30,8 @@ class MultiAssetPortfolio:
         initial_capital=10000.0,
         use_market_costs=True,
         commission_percent=0.0,
-        slippage_percent=0.0
+        slippage_percent=0.0,
+        maximum_resize_cost_ratio=None
     ):
         if initial_capital <= 0:
             raise ValueError(
@@ -46,6 +47,23 @@ class MultiAssetPortfolio:
             raise ValueError(
                 "slippage_percent non può essere negativo."
             )
+
+        if maximum_resize_cost_ratio is not None:
+            maximum_resize_cost_ratio = float(
+                maximum_resize_cost_ratio
+            )
+
+            if (
+                not math.isfinite(
+                    maximum_resize_cost_ratio
+                )
+                or
+                not 0 < maximum_resize_cost_ratio <= 1
+            ):
+                raise ValueError(
+                    "maximum_resize_cost_ratio deve essere "
+                    "compreso tra 0 e 1."
+                )
 
         self.initial_capital = float(
             initial_capital
@@ -67,6 +85,10 @@ class MultiAssetPortfolio:
             slippage_percent
         )
 
+        self.maximum_resize_cost_ratio = (
+            maximum_resize_cost_ratio
+        )
+
         self.positions = {}
         self.previous_prices = {}
 
@@ -76,6 +98,7 @@ class MultiAssetPortfolio:
 
         self.total_turnover_notional = 0.0
         self.total_turnover_ratio = 0.0
+        self.uneconomic_resize_skip_count = 0
 
         self.orders = []
         self.equity_curve = []
@@ -596,6 +619,7 @@ class MultiAssetPortfolio:
                 "turnover_notional": 0.0,
                 "turnover_ratio": 0.0,
                 "total_cost": 0.0,
+                "uneconomic_resize_skips": 0,
                 "equity_before": 0.0,
                 "equity_after": 0.0,
                 "skipped": {
@@ -699,6 +723,7 @@ class MultiAssetPortfolio:
         orders = []
         total_cost = 0.0
         turnover_notional = 0.0
+        uneconomic_resize_skips = 0
 
         for ticker in all_tickers:
             current_quantity = float(
@@ -741,6 +766,63 @@ class MultiAssetPortfolio:
                     )
                 )
             )
+
+            trade_notional = float(
+                cost_data[
+                    "trade_notional"
+                ]
+            )
+
+            relative_execution_cost = (
+                float(
+                    cost_data[
+                        "total_cost"
+                    ]
+                )
+                /
+                trade_notional
+                if trade_notional > 0
+                else 0.0
+            )
+
+            same_direction_exposure_increase = (
+                current_quantity
+                *
+                target_quantity
+                > 0
+                and
+                abs(
+                    target_quantity
+                )
+                >
+                abs(
+                    current_quantity
+                )
+            )
+
+            if (
+                self.maximum_resize_cost_ratio
+                is not None
+                and
+                same_direction_exposure_increase
+                and
+                relative_execution_cost
+                >
+                self.maximum_resize_cost_ratio
+            ):
+                skipped[
+                    ticker
+                ] = (
+                    "Resize rinviato: costo relativo "
+                    f"{relative_execution_cost:.4%} oltre "
+                    "la soglia configurata."
+                )
+
+                uneconomic_resize_skips += 1
+
+                self.uneconomic_resize_skip_count += 1
+
+                continue
 
             if (
                 cost_data[
@@ -917,6 +999,9 @@ class MultiAssetPortfolio:
             ),
             "total_cost": float(
                 total_cost
+            ),
+            "uneconomic_resize_skips": int(
+                uneconomic_resize_skips
             ),
             "equity_before": (
                 equity_before

@@ -70,6 +70,17 @@ def parse_arguments():
     )
 
     parser.add_argument(
+        "--maximum-resize-cost-ratio",
+        type=float,
+        default=0.0025,
+        help=(
+            "Costo massimo accettato per un piccolo aumento "
+            "della stessa posizione, espresso come quota "
+            "del nozionale dell'ordine."
+        )
+    )
+
+    parser.add_argument(
         "--calendar-anchor",
         default="SPY",
         help=(
@@ -217,11 +228,11 @@ def print_ranking(
     calendar_report
 ):
     print()
-    print("=" * 150)
+    print("=" * 170)
     print(
         "MULTI-ASSET TSMOM RESEARCH BENCHMARK"
     )
-    print("=" * 150)
+    print("=" * 170)
 
     print(
         f"Calendario comune: "
@@ -246,7 +257,7 @@ def print_ranking(
         )
     )
 
-    print("-" * 150)
+    print("-" * 170)
 
     print(
         f"{'RANK':>4} "
@@ -258,11 +269,13 @@ def print_ranking(
         f"{'MAX DD':>9} "
         f"{'CALMAR':>9} "
         f"{'COSTI':>10} "
+        f"{'ORDINI':>8} "
+        f"{'BATCH':>7} "
         f"{'TURNOVER':>10} "
         f"{'AVG GROSS':>11}"
     )
 
-    print("-" * 150)
+    print("-" * 170)
 
     for rank, item in enumerate(
         result[
@@ -291,6 +304,8 @@ def print_ranking(
             f"{metrics['maximum_drawdown_percent']:8.2f}% "
             f"{metrics['calmar_ratio']:9.2f} "
             f"{metrics['total_costs']:10.2f} "
+            f"{int(metrics['order_count']):8} "
+            f"{int(item.get('uneconomic_resize_skip_count', 0)):7} "
             f"{metrics['total_turnover_ratio']:10.2f} "
             f"{average_gross:10.2f}"
         )
@@ -590,6 +605,9 @@ def main():
             use_market_costs=True,
             minimum_active_assets=(
                 args.minimum_active_assets
+            ),
+            maximum_resize_cost_ratio=(
+                args.maximum_resize_cost_ratio
             )
         )
 

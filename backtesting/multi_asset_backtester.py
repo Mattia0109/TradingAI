@@ -59,7 +59,8 @@ class MultiAssetBacktester:
         commission_percent=0.0,
         slippage_percent=0.0,
         liquidate_at_end=True,
-        minimum_active_assets=1
+        minimum_active_assets=1,
+        maximum_resize_cost_ratio=None
     ):
         if strategy is None:
             strategy = (
@@ -103,6 +104,23 @@ class MultiAssetBacktester:
                 "minimum_active_assets deve essere positivo."
             )
 
+        if maximum_resize_cost_ratio is not None:
+            maximum_resize_cost_ratio = float(
+                maximum_resize_cost_ratio
+            )
+
+            if (
+                not math.isfinite(
+                    maximum_resize_cost_ratio
+                )
+                or
+                not 0 < maximum_resize_cost_ratio <= 1
+            ):
+                raise ValueError(
+                    "maximum_resize_cost_ratio deve essere "
+                    "compreso tra 0 e 1."
+                )
+
         self.strategy = strategy
         self.allocator = allocator
 
@@ -132,6 +150,10 @@ class MultiAssetBacktester:
 
         self.minimum_active_assets = int(
             minimum_active_assets
+        )
+
+        self.maximum_resize_cost_ratio = (
+            maximum_resize_cost_ratio
         )
 
 
@@ -798,6 +820,9 @@ class MultiAssetBacktester:
             ),
             slippage_percent=(
                 self.slippage_percent
+            ),
+            maximum_resize_cost_ratio=(
+                self.maximum_resize_cost_ratio
             )
         )
 
@@ -1083,6 +1108,9 @@ class MultiAssetBacktester:
                 ),
                 "minimum_active_assets": (
                     self.minimum_active_assets
+                ),
+                "maximum_resize_cost_ratio": (
+                    self.maximum_resize_cost_ratio
                 )
             },
             "metrics": metrics,
@@ -1102,6 +1130,10 @@ class MultiAssetBacktester:
             ),
             "risk_peak_reset_count": (
                 risk_peak_reset_count
+            ),
+            "uneconomic_resize_skip_count": (
+                portfolio
+                .uneconomic_resize_skip_count
             ),
             "bankrupt": portfolio.bankrupt
         }

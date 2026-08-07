@@ -527,6 +527,27 @@ def test_complete_benchmark_runs():
         "BUY_HOLD_60_40"
     }
 
+    assert all(
+        item[
+            "settings"
+        ][
+            "maximum_resize_cost_ratio"
+        ]
+        ==
+        pytest.approx(0.0025)
+        for item in result[
+            "tsmom_results"
+        ]
+    )
+
+    assert all(
+        "uneconomic_resize_skip_count"
+        in item
+        for item in result[
+            "tsmom_results"
+        ]
+    )
+
 
 def test_yearly_returns_are_generated():
 
