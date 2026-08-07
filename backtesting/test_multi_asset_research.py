@@ -109,6 +109,157 @@ def create_asset_classes():
     }
 
 
+class AlwaysLongStrategy:
+
+    name = "always_long"
+    minimum_history = 2
+
+
+    @staticmethod
+    def generate_signals(
+        market_data,
+        asset_classes=None
+    ):
+        if asset_classes is None:
+            asset_classes = {}
+
+        return {
+            ticker: {
+                "ticker": ticker,
+                "asset_class": (
+                    asset_classes.get(
+                        ticker,
+                        "EQUITY"
+                    )
+                ),
+                "action": "LONG",
+                "signal": 1.0,
+                "annualized_volatility": 0.10
+            }
+            for ticker in market_data
+        }
+
+
+class DrawdownKillSwitchAllocator:
+
+    def __init__(
+        self,
+        kill_switch_drawdown=0.20
+    ):
+        self.kill_switch_drawdown = float(
+            kill_switch_drawdown
+        )
+
+        self.observed_drawdowns = []
+
+
+    def allocate(
+        self,
+        signals,
+        previous_weights=None,
+        current_drawdown=0.0
+    ):
+        drawdown = float(
+            current_drawdown
+        )
+
+        self.observed_drawdowns.append(
+            drawdown
+        )
+
+        kill_switch_active = (
+            drawdown
+            >=
+            self.kill_switch_drawdown
+        )
+
+        target_weight = (
+            0.0
+            if kill_switch_active
+            else 0.50
+        )
+
+        return {
+            "weights": {
+                ticker: target_weight
+                for ticker in signals
+            },
+            "kill_switch_active": (
+                kill_switch_active
+            )
+        }
+
+
+def test_kill_switch_rearms_after_liquidation():
+
+    dates = pd.date_range(
+        start="2020-01-01",
+        periods=9,
+        freq="1D"
+    )
+
+    data = {
+        "SPY": pd.DataFrame(
+            {
+                "date": dates,
+                "close": [
+                    100,
+                    100,
+                    100,
+                    50,
+                    50,
+                    55,
+                    60,
+                    65,
+                    70
+                ]
+            }
+        )
+    }
+
+    allocator = (
+        DrawdownKillSwitchAllocator()
+    )
+
+    backtester = (
+        ResearchMultiAssetBacktester(
+            strategy=AlwaysLongStrategy(),
+            allocator=allocator,
+            initial_capital=10000,
+            rebalance_frequency=2,
+            use_market_costs=False,
+            minimum_active_assets=1
+        )
+    )
+
+    result = backtester.run(
+        market_data=data,
+        asset_classes={
+            "SPY": "EQUITY"
+        }
+    )
+
+    assert len(
+        allocator.observed_drawdowns
+    ) >= 3
+
+    assert (
+        allocator.observed_drawdowns[1]
+        >=
+        0.20
+    )
+
+    assert (
+        allocator.observed_drawdowns[2]
+        ==
+        pytest.approx(0.0)
+    )
+
+    assert result[
+        "risk_peak_reset_count"
+    ] == 1
+
+
 def test_research_backtester_respects_trade_start():
 
     data = create_market_data()
