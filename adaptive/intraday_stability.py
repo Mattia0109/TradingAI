@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import time
 from enum import Enum
 from itertools import combinations
+from typing import Sequence
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -45,8 +46,8 @@ class IntradayStabilityConfig:
     high_median_shift_iqr: float = 1.50
     redundancy_threshold: float = 0.85
     numeric_features: tuple[str, ...] = (
-        "squeeze_momentum",
-        "squeeze_momentum_change",
+        "squeeze_momentum_pct_close",
+        "squeeze_momentum_change_pct_close",
         "choppiness",
         "cmf",
     )
@@ -106,7 +107,9 @@ class IntradayStabilityReport:
     excluded_rows: int
     block_summary: pd.DataFrame
     numeric_drift: pd.DataFrame
+    numeric_persistence: pd.DataFrame
     state_drift: pd.DataFrame
+    state_persistence: pd.DataFrame
     phase_summary: pd.DataFrame
     redundancy: pd.DataFrame
     research_only: bool = True
@@ -164,6 +167,54 @@ def regular_session_frame(
     return filtered, int(len(frame) - len(filtered))
 
 
+def add_dimensionless_squeeze_features(
+    values: pd.DataFrame,
+    market: pd.DataFrame,
+    config: IntradayStabilityConfig | None = None,
+) -> pd.DataFrame:
+    """Aggiunge versioni relative al close senza alterare le formule originali."""
+
+    settings = config or IntradayStabilityConfig()
+    if not isinstance(values, pd.DataFrame):
+        raise TypeError("values deve essere un pandas DataFrame.")
+    if not isinstance(values.index, pd.DatetimeIndex):
+        raise ValueError("values deve avere un DatetimeIndex.")
+    required = {"squeeze_momentum", "squeeze_momentum_change"}
+    missing = sorted(required.difference(values.columns))
+    if missing:
+        raise ValueError(f"Feature Squeeze mancanti: {missing}.")
+
+    regular, _ = regular_session_frame(market, settings)
+    close_index = _localized_timestamps(
+        regular["date"],
+        settings.market_timezone,
+    )
+    close = pd.Series(
+        pd.to_numeric(regular["close"], errors="coerce").to_numpy(dtype=float),
+        index=close_index,
+        dtype=float,
+    )
+    if close.isna().any() or (close <= 0.0).any():
+        raise ValueError("Il close deve essere numerico e positivo.")
+    if close.index.duplicated().any():
+        raise ValueError("Timestamp close duplicati.")
+
+    result = values.copy()
+    result.index = _localized_timestamps(result.index, settings.market_timezone)
+    aligned_close = close.reindex(result.index)
+    if aligned_close.isna().any():
+        raise ValueError("Impossibile allineare feature e close RTH.")
+    result["squeeze_momentum_pct_close"] = (
+        pd.to_numeric(result["squeeze_momentum"], errors="coerce")
+        / aligned_close
+    )
+    result["squeeze_momentum_change_pct_close"] = (
+        pd.to_numeric(result["squeeze_momentum_change"], errors="coerce")
+        / aligned_close
+    )
+    return result
+
+
 class IntradayFeatureStabilityAnalyzer:
     """Confronta blocchi storici fissi senza riassegnarli quando arrivano dati."""
 
@@ -217,6 +268,87 @@ class IntradayFeatureStabilityAnalyzer:
         ):
             return DistributionShift.MODERATE_SHIFT
         return DistributionShift.LOW_SHIFT
+
+    @staticmethod
+    def _longest_true_run(values: Sequence[bool]) -> int:
+        longest = 0
+        current = 0
+        for value in values:
+            current = current + 1 if bool(value) else 0
+            longest = max(longest, current)
+        return longest
+
+    def _persistence_summary(
+        self,
+        drift: pd.DataFrame,
+        metrics: dict[str, str],
+    ) -> pd.DataFrame:
+        columns = [
+            "ticker",
+            "feature",
+            "transitions",
+            "elevated_transitions",
+            "high_transitions",
+            "longest_elevated_run",
+            "latest_shift",
+            "pattern",
+            *metrics,
+        ]
+        if drift.empty:
+            return pd.DataFrame(columns=columns)
+        rows: list[dict[str, object]] = []
+        for (ticker, feature), group in drift.groupby(
+            ["ticker", "feature"],
+            sort=True,
+        ):
+            ordered = group.sort_values("current_block")
+            valid = ordered.loc[ordered["shift"] != "INSUFFICIENT"]
+            levels = valid["shift"].astype(str).tolist()
+            elevated = [
+                level
+                in {
+                    DistributionShift.MODERATE_SHIFT.value,
+                    DistributionShift.HIGH_SHIFT.value,
+                }
+                for level in levels
+            ]
+            high = [
+                level == DistributionShift.HIGH_SHIFT.value for level in levels
+            ]
+            longest_elevated = self._longest_true_run(elevated)
+            longest_high = self._longest_true_run(high)
+            if not levels:
+                pattern = "INSUFFICIENT"
+                latest = "INSUFFICIENT"
+            elif longest_high >= 2:
+                pattern = "PERSISTENT_HIGH"
+                latest = levels[-1]
+            elif longest_elevated >= 2:
+                pattern = "PERSISTENT_ELEVATED"
+                latest = levels[-1]
+            elif any(elevated):
+                pattern = "ISOLATED_SHIFT"
+                latest = levels[-1]
+            else:
+                pattern = "LOW_OR_NONE"
+                latest = levels[-1]
+            row: dict[str, object] = {
+                "ticker": ticker,
+                "feature": feature,
+                "transitions": len(levels),
+                "elevated_transitions": int(sum(elevated)),
+                "high_transitions": int(sum(high)),
+                "longest_elevated_run": longest_elevated,
+                "latest_shift": latest,
+                "pattern": pattern,
+            }
+            for output_name, source_name in metrics.items():
+                numeric = pd.to_numeric(valid[source_name], errors="coerce").dropna()
+                row[output_name] = (
+                    float(numeric.max()) if not numeric.empty else math.nan
+                )
+            rows.append(row)
+        return pd.DataFrame(rows, columns=columns)
 
     def _prepare_values(self, values: pd.DataFrame) -> tuple[pd.DataFrame, int]:
         if not isinstance(values, pd.DataFrame):
@@ -360,6 +492,13 @@ class IntradayFeatureStabilityAnalyzer:
                     }
                 )
         numeric_drift = pd.DataFrame(drift_rows)
+        numeric_persistence = self._persistence_summary(
+            numeric_drift,
+            {
+                "max_psi": "psi",
+                "max_median_shift_iqr": "median_shift_iqr",
+            },
+        )
 
         state_rows: list[dict[str, object]] = []
         for previous_block, current_block in zip(
@@ -404,6 +543,10 @@ class IntradayFeatureStabilityAnalyzer:
                     }
                 )
         state_drift = pd.DataFrame(state_rows)
+        state_persistence = self._persistence_summary(
+            state_drift,
+            {"max_total_variation": "total_variation"},
+        )
 
         phase_rows: list[dict[str, object]] = []
         for phase, group in complete.groupby("session_phase", sort=True):
@@ -466,7 +609,9 @@ class IntradayFeatureStabilityAnalyzer:
             excluded_rows=excluded_rows,
             block_summary=block_summary,
             numeric_drift=numeric_drift,
+            numeric_persistence=numeric_persistence,
             state_drift=state_drift,
+            state_persistence=state_persistence,
             phase_summary=phase_summary,
             redundancy=redundancy,
         )

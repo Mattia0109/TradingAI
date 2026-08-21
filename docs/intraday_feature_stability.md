@@ -35,9 +35,29 @@ Per ogni feature numerica e transizione fra blocchi vengono calcolati:
   blocco precedente;
 - spostamento della mediana espresso in IQR del blocco precedente.
 
+Le due misure Squeeze usate nel confronto di stabilità sono rese
+`dimensionless` dividendo valore e variazione per il close della stessa barra.
+Le serie originali restano inalterate nel motore di parità. Questa derivazione
+evita che un semplice cambiamento dell'unità o del livello nominale del prezzo
+venga scambiato per drift della feature; non elimina invece i cambiamenti reali
+di volatilità o forma della distribuzione.
+
 Le etichette `LOW_SHIFT`, `MODERATE_SHIFT` e `HIGH_SHIFT` descrivono soltanto
 quanto è cambiata la distribuzione. Non sono giudizi sulla qualità di una
 strategia.
+
+Il report non usa più soltanto il massimo osservato. Per ogni feature mostra
+anche quante transizioni sono elevate, la sequenza consecutiva più lunga,
+l'ultimo livello e uno dei seguenti pattern:
+
+- `LOW_OR_NONE`: nessuna transizione elevata;
+- `ISOLATED_SHIFT`: cambiamento presente in una sola zona del campione;
+- `PERSISTENT_ELEVATED`: almeno due transizioni elevate consecutive;
+- `PERSISTENT_HIGH`: almeno due transizioni `HIGH_SHIFT` consecutive;
+- `INSUFFICIENT`: evidenza numerica non sufficiente.
+
+La persistenza riduce il rischio di attribuire importanza a un singolo massimo
+casuale, ma quattro blocchi restano un campione molto piccolo.
 
 Per `squeeze_state` e `chop_segment` viene usata la distanza di variazione
 totale tra le frequenze delle categorie. Il report calcola inoltre:
@@ -64,4 +84,3 @@ python -m adaptive.run_intraday_stability_report `
 Il runtime previsto resta LEAN locale gratuito, non QuantConnect Cloud. Questo
 comando usa il provider dati corrente soltanto per produrre un report storico
 descrittivo e non collega le feature a un algoritmo di esecuzione.
-

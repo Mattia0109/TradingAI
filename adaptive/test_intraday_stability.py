@@ -10,6 +10,7 @@ from adaptive.intraday_stability import (
     DistributionShift,
     IntradayFeatureStabilityAnalyzer,
     IntradayStabilityConfig,
+    add_dimensionless_squeeze_features,
     regular_session_frame,
 )
 
@@ -27,12 +28,15 @@ def feature_values(sessions: int = 20) -> pd.DataFrame:
     )
     x = np.arange(len(timestamps), dtype=float)
     squeeze = np.sin(x / 13.0) + 0.1 * np.cos(x / 5.0)
+    squeeze_change = np.r_[np.nan, np.diff(squeeze)]
     choppiness = 50.0 + 8.0 * np.sin(x / 17.0)
     cmf = 0.25 * np.sin(x / 11.0 + 0.8)
     return pd.DataFrame(
         {
             "squeeze_momentum": squeeze,
-            "squeeze_momentum_change": np.r_[np.nan, np.diff(squeeze)],
+            "squeeze_momentum_change": squeeze_change,
+            "squeeze_momentum_pct_close": squeeze / 100.0,
+            "squeeze_momentum_change_pct_close": squeeze_change / 100.0,
             "choppiness": choppiness,
             "cmf": cmf,
             "squeeze_state": np.where(
@@ -121,6 +125,33 @@ def test_complete_block_assignments_do_not_change_when_future_is_appended() -> N
     )
 
 
+def test_dimensionless_squeeze_is_invariant_to_price_unit_scaling() -> None:
+    values = feature_values(5)
+    market = pd.DataFrame(
+        {
+            "date": values.index,
+            "close": np.linspace(100.0, 105.0, len(values)),
+        }
+    )
+    scaled_values = values.copy()
+    scaled_values["squeeze_momentum"] *= 10.0
+    scaled_values["squeeze_momentum_change"] *= 10.0
+    scaled_market = market.copy()
+    scaled_market["close"] *= 10.0
+
+    baseline = add_dimensionless_squeeze_features(values, market)
+    scaled = add_dimensionless_squeeze_features(scaled_values, scaled_market)
+
+    pd.testing.assert_series_equal(
+        baseline["squeeze_momentum_pct_close"],
+        scaled["squeeze_momentum_pct_close"],
+    )
+    pd.testing.assert_series_equal(
+        baseline["squeeze_momentum_change_pct_close"],
+        scaled["squeeze_momentum_change_pct_close"],
+    )
+
+
 def test_large_last_block_change_is_reported_as_high_shift() -> None:
     values = feature_values(20)
     sessions = pd.Series(values.index.date, index=values.index)
@@ -140,13 +171,34 @@ def test_large_last_block_change_is_reported_as_high_shift() -> None:
     assert row["median_shift_iqr"] > 1.5
 
 
+def test_consecutive_elevated_transitions_are_marked_persistent() -> None:
+    values = feature_values(20)
+    sessions = pd.Series(values.index.date, index=values.index)
+    ordered_sessions = sorted(sessions.unique())
+    changed = values.copy()
+    changed.loc[sessions.isin(ordered_sessions[10:15]), "choppiness"] += 20.0
+    changed.loc[sessions.isin(ordered_sessions[15:20]), "choppiness"] += 40.0
+
+    report = IntradayFeatureStabilityAnalyzer(compact_config()).analyze(
+        "SPY",
+        changed,
+    )
+    row = report.numeric_persistence.loc[
+        report.numeric_persistence["feature"] == "choppiness"
+    ].iloc[0]
+
+    assert row["high_transitions"] >= 2
+    assert row["longest_elevated_run"] >= 2
+    assert row["pattern"] == "PERSISTENT_HIGH"
+
+
 def test_phase_summary_uses_open_middle_and_close_buckets() -> None:
     report = IntradayFeatureStabilityAnalyzer(compact_config()).analyze(
         "SPY",
         feature_values(15),
     )
     squeeze = report.phase_summary.loc[
-        report.phase_summary["feature"] == "squeeze_momentum"
+        report.phase_summary["feature"] == "squeeze_momentum_pct_close"
     ].set_index("phase")
 
     assert squeeze.loc["OPEN", "rows"] == 15 * 4
@@ -156,10 +208,10 @@ def test_phase_summary_uses_open_middle_and_close_buckets() -> None:
 
 def test_redundancy_report_flags_near_duplicate_features() -> None:
     values = feature_values(15)
-    values["cmf"] = values["squeeze_momentum"] * 0.5
+    values["cmf"] = values["squeeze_momentum_pct_close"] * 0.5
     report = IntradayFeatureStabilityAnalyzer(compact_config()).analyze("SPY", values)
     row = report.redundancy.loc[
-        (report.redundancy["left_feature"] == "squeeze_momentum")
+        (report.redundancy["left_feature"] == "squeeze_momentum_pct_close")
         & (report.redundancy["right_feature"] == "cmf")
     ].iloc[0]
 
@@ -188,7 +240,9 @@ def test_report_contains_no_operational_or_future_outcome_fields() -> None:
     for table in (
         report.block_summary,
         report.numeric_drift,
+        report.numeric_persistence,
         report.state_drift,
+        report.state_persistence,
         report.phase_summary,
         report.redundancy,
     ):

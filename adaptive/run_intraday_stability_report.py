@@ -6,13 +6,12 @@ import argparse
 import math
 import sys
 
-import pandas as pd
-
 from adaptive.intraday_audit import IntradayReadiness, IntradayResearchAuditor
 from adaptive.intraday_features import IntradayReferenceFeatureEngine
 from adaptive.intraday_stability import (
     IntradayFeatureStabilityAnalyzer,
     IntradayStabilityConfig,
+    add_dimensionless_squeeze_features,
     regular_session_frame,
 )
 from adaptive.run_adaptive_scan import load_markets
@@ -20,12 +19,6 @@ from data_engine.pipeline import MarketDataPipeline
 
 
 DEFAULT_STABILITY_UNIVERSE = ("SPY", "QQQ", "IWM", "GLD", "TLT")
-SHIFT_RANK = {
-    "INSUFFICIENT": -1,
-    "LOW_SHIFT": 0,
-    "MODERATE_SHIFT": 1,
-    "HIGH_SHIFT": 2,
-}
 
 
 def parse_arguments(argv=None):
@@ -55,16 +48,6 @@ def _tickers(values) -> tuple[str, ...]:
             if str(value).strip()
         )
     )
-
-
-def _worst_shift(values: pd.Series) -> str:
-    labels = [str(value) for value in values if str(value) in SHIFT_RANK]
-    return max(labels, key=SHIFT_RANK.get) if labels else "INSUFFICIENT"
-
-
-def _maximum(values: pd.Series) -> float:
-    numeric = pd.to_numeric(values, errors="coerce").dropna()
-    return float(numeric.max()) if not numeric.empty else math.nan
 
 
 def main(argv=None) -> int:
@@ -97,6 +80,11 @@ def main(argv=None) -> int:
                 raise ValueError("Audit dati REJECTED.")
             regular_data, _ = regular_session_frame(data, config)
             features = feature_engine.compute(regular_data).values
+            features = add_dimensionless_squeeze_features(
+                features,
+                regular_data,
+                config,
+            )
             reports.append(analyzer.analyze(ticker, features))
         except Exception as exc:
             errors[ticker] = f"{type(exc).__name__}: {exc}"
@@ -107,6 +95,7 @@ def main(argv=None) -> int:
     print("Nessun segnale, ordine, size, stop, leva, outcome futuro o P&L.")
     print("I blocchi sono fissi: nuovi dati non riassegnano le sessioni passate.")
     print("Le feature vengono calcolate dopo aver escluso extended-hours e weekend.")
+    print("Le feature Squeeze del drift sono dimensionless, divise per il close.")
 
     print("\nCOPERTURA BLOCCHI")
     print(f"{'TICKER':10} {'SESSIONI':>9} {'BLOCCHI':>8} {'ESCLUSE':>8} {'STATO':>20}")
@@ -122,44 +111,56 @@ def main(argv=None) -> int:
             f"{report.complete_blocks:8d} {report.excluded_rows:8d} {status:>20}"
         )
 
-    print("\nDRIFT FEATURE NUMERICHE")
+    print("\nPERSISTENZA DRIFT FEATURE NUMERICHE")
     print(
-        f"{'TICKER':10} {'FEATURE':27} {'MAX_PSI':>9} "
-        f"{'MAX_SHIFT':>10} {'STATO':>16}"
+        f"{'TICKER':10} {'FEATURE':36} {'N':>3} {'ELEV':>4} {'HIGH':>4} "
+        f"{'RUN':>3} {'MAX_PSI':>8} {'MAX_MED':>8} "
+        f"{'LATEST':>16} {'PATTERN':>20}"
     )
-    print("-" * 78)
+    print("-" * 128)
     for report in sorted(reports, key=lambda item: item.ticker):
-        if report.numeric_drift.empty:
+        if report.numeric_persistence.empty:
             print(
-                f"{report.ticker:10} {'-':27} {'n/a':>9} "
-                f"{'n/a':>10} {'INSUFFICIENT':>16}"
+                f"{report.ticker:10} {'-':36} {'0':>3} {'0':>4} {'0':>4} "
+                f"{'0':>3} {'n/a':>8} {'n/a':>8} "
+                f"{'INSUFFICIENT':>16} {'INSUFFICIENT':>20}"
             )
             continue
-        for feature, group in report.numeric_drift.groupby("feature", sort=True):
-            psi = _maximum(group["psi"])
-            median_shift = _maximum(group["median_shift_iqr"])
+        for row in report.numeric_persistence.itertuples(index=False):
             print(
-                f"{report.ticker:10} {feature:27} "
-                f"{psi:9.3f} {median_shift:10.3f} {_worst_shift(group['shift']):>16}"
+                f"{row.ticker:10} {row.feature:36} "
+                f"{row.transitions:3d} {row.elevated_transitions:4d} "
+                f"{row.high_transitions:4d} {row.longest_elevated_run:3d} "
+                f"{row.max_psi:8.3f} {row.max_median_shift_iqr:8.3f} "
+                f"{row.latest_shift:>16} {row.pattern:>20}"
             )
 
-    print("\nDRIFT STATI CATEGORICI")
-    print(f"{'TICKER':10} {'FEATURE':20} {'MAX_TVD':>9} {'STATO':>16}")
-    print("-" * 59)
+    print("\nPERSISTENZA DRIFT STATI CATEGORICI")
+    print(
+        f"{'TICKER':10} {'FEATURE':20} {'N':>3} {'ELEV':>4} {'HIGH':>4} "
+        f"{'RUN':>3} {'MAX_TVD':>8} {'LATEST':>16} {'PATTERN':>20}"
+    )
+    print("-" * 96)
     for report in sorted(reports, key=lambda item: item.ticker):
-        if report.state_drift.empty:
-            print(f"{report.ticker:10} {'-':20} {'n/a':>9} {'INSUFFICIENT':>16}")
-            continue
-        for feature, group in report.state_drift.groupby("feature", sort=True):
-            tvd = _maximum(group["total_variation"])
+        if report.state_persistence.empty:
             print(
-                f"{report.ticker:10} {feature:20} {tvd:9.3f} "
-                f"{_worst_shift(group['shift']):>16}"
+                f"{report.ticker:10} {'-':20} {'0':>3} {'0':>4} {'0':>4} "
+                f"{'0':>3} {'n/a':>8} {'INSUFFICIENT':>16} "
+                f"{'INSUFFICIENT':>20}"
+            )
+            continue
+        for row in report.state_persistence.itertuples(index=False):
+            print(
+                f"{row.ticker:10} {row.feature:20} "
+                f"{row.transitions:3d} {row.elevated_transitions:4d} "
+                f"{row.high_transitions:4d} {row.longest_elevated_run:3d} "
+                f"{row.max_total_variation:8.3f} {row.latest_shift:>16} "
+                f"{row.pattern:>20}"
             )
 
     print("\nMEDIANE PER FASE DI SESSIONE")
-    print(f"{'TICKER':10} {'FEATURE':27} {'OPEN':>11} {'MID':>11} {'CLOSE':>11}")
-    print("-" * 75)
+    print(f"{'TICKER':10} {'FEATURE':36} {'OPEN':>12} {'MID':>12} {'CLOSE':>12}")
+    print("-" * 86)
     for report in sorted(reports, key=lambda item: item.ticker):
         if report.phase_summary.empty:
             continue
@@ -170,10 +171,10 @@ def main(argv=None) -> int:
         )
         for feature, row in pivot.sort_index().iterrows():
             print(
-                f"{report.ticker:10} {feature:27} "
-                f"{row.get('OPEN', math.nan):11.4f} "
-                f"{row.get('MID_SESSION', math.nan):11.4f} "
-                f"{row.get('CLOSE', math.nan):11.4f}"
+                f"{report.ticker:10} {feature:36} "
+                f"{row.get('OPEN', math.nan):12.6f} "
+                f"{row.get('MID_SESSION', math.nan):12.6f} "
+                f"{row.get('CLOSE', math.nan):12.6f}"
             )
 
     print("\nRIDONDANZA ELEVATA")
