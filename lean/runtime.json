@@ -1,0 +1,9 @@
+{
+  "engine": "LEAN",
+  "image": "quantconnect/lean:18020",
+  "digest": "sha256:844fb659c91ca068419201d2cb59442253d912d6fca5bb502d1faeec8c5faf40",
+  "mode": "backtesting",
+  "live_enabled": false,
+  "requires_quantconnect_account": false,
+  "data_source": "sample data bundled with the pinned LEAN image"
+}
