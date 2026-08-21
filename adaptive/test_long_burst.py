@@ -219,6 +219,57 @@ def test_only_fully_matured_horizons_enter_diagnostics() -> None:
     assert (result.signal_observations["horizon_bars"] == horizon).all()
 
 
+def test_diagnostic_outcomes_start_at_next_open_and_apply_two_sided_cost() -> None:
+    data = burst_market()
+    indexed = data.set_index("date")
+    cost_bps = 20.0
+    engine = LongBurstSignalEngine(permissive_config())
+    result = LongBurstBacktester(
+        engine,
+        LongBurstBacktestConfig(round_trip_cost_bps=cost_bps),
+    ).run({"TEST": data})
+
+    observation = result.signal_observations.iloc[0]
+    expected_gross = (
+        float(indexed.loc[observation["outcome_date"], "close"])
+        / float(indexed.loc[observation["entry_date"], "open"])
+        - 1.0
+    )
+    side_cost = cost_bps / 20_000.0
+    expected_net = (1.0 + expected_gross) * (1.0 - side_cost) ** 2 - 1.0
+
+    assert observation["entry_date"] > observation["decision_date"]
+    assert observation["realized_return"] == pytest.approx(expected_gross)
+    assert observation["realized_net_return"] == pytest.approx(expected_net)
+
+
+def test_diagnostics_use_non_overlapping_forecasts_and_all_short_horizons() -> None:
+    engine = LongBurstSignalEngine(permissive_config())
+    result = LongBurstBacktester(
+        engine,
+        LongBurstBacktestConfig(maximum_holding_bars=5),
+    ).run({"AAA": burst_market(1), "BBB": burst_market(2)})
+
+    independent = result.signal_observations.loc[
+        result.signal_observations["independent"]
+    ]
+    for _, group in independent.groupby("ticker"):
+        ordered = group.sort_values("decision_date")
+        assert (
+            ordered["decision_date"].iloc[1:].to_numpy()
+            >= ordered["outcome_date"].iloc[:-1].to_numpy()
+        ).all()
+
+    assert result.independent_signal_count == len(independent)
+    assert result.independent_signal_count <= result.signal_count
+    assert set(result.horizon_diagnostics.index) == {1, 2, 3, 4, 5}
+    assert (
+        result.horizon_diagnostics["signals"]
+        <= result.horizon_diagnostics["all_signals"]
+    ).all()
+    assert int(result.regime_diagnostics["signals"].sum()) == len(independent)
+
+
 def test_cost_configuration_does_not_mutate_signal_engine() -> None:
     base = permissive_config()
     engine = LongBurstSignalEngine(base)
@@ -264,3 +315,5 @@ def test_cli_runs_without_external_execution(monkeypatch, capsys) -> None:
     assert "Segnali ammessi: LONG / NO_TRADE" in output
     assert "Leva: assente" in output
     assert "Broker: assente" in output
+    assert "Segnali indipendenti" in output
+    assert "N_IND" in output

@@ -110,6 +110,28 @@ Il backtester chiude una simulazione per:
 
 MFE e MAE vengono registrati soltanto come diagnostica descrittiva.
 
+`FLAT`/`NO_TRADE` nasce come gate per non aprire una nuova osservazione. La V1
+lo riutilizza anche come `SIGNAL_DECAY`; il report segnala esplicitamente quando
+questa scelta domina le chiusure, perché non dimostra di per sé che sia una
+regola d'uscita valida. La logica non viene corretta retrospettivamente dopo
+aver visto il rendimento: un'alternativa dovrà essere formulata prima e
+valutata su dati successivi o in una validazione annidata.
+
+## Audit diagnostico
+
+Per separare il numero di segnali dalla quantità di evidenza statistica, il
+report mostra:
+
+- `N_ALL`: tutti i forecast maturati, inclusi quelli sovrapposti;
+- `N_IND`: forecast non sovrapposti per ticker e orizzonte;
+- outcome calcolati dall'apertura successiva alla decisione, non dalla chiusura
+  già osservata;
+- diagnostica per regime, ticker, percorso d'ingresso e orizzonti da una a
+  cinque barre.
+
+Le tabelle sono descrittive. Non modificano segnali, esposizioni, uscite o il
+promotion gate e non selezionano automaticamente una configurazione migliore.
+
 ## Esecuzione locale
 
 ```powershell

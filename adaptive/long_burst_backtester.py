@@ -58,7 +58,11 @@ class LongBurstBacktestResult:
     asset_exposure: pd.DataFrame
     trades: pd.DataFrame
     signal_observations: pd.DataFrame
+    horizon_observations: pd.DataFrame
     regime_diagnostics: pd.DataFrame
+    ticker_diagnostics: pd.DataFrame
+    entry_path_diagnostics: pd.DataFrame
+    horizon_diagnostics: pd.DataFrame
     errors: Mapping[str, str]
     total_return: float
     cagr: float
@@ -70,6 +74,7 @@ class LongBurstBacktestResult:
     benchmark_sharpe: float
     benchmark_max_drawdown: float
     signal_count: int
+    independent_signal_count: int
     trade_count: int
     win_rate: float
     expectancy: float
@@ -88,6 +93,7 @@ class _AssetSimulation:
     benchmark_returns: pd.Series
     trades: pd.DataFrame
     observations: pd.DataFrame
+    horizon_observations: pd.DataFrame
 
 
 def _performance_metrics(
@@ -141,31 +147,75 @@ class LongBurstBacktester:
         ticker: str,
         frame: pd.DataFrame,
         signals: pd.DataFrame,
-    ) -> pd.DataFrame:
-        horizon = self.engine.config.forecast_horizon_bars
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Produce outcome eseguibili e un sottocampione non sovrapposto.
+
+        Una decisione nasce alla chiusura ``t``; il primo prezzo utilizzabile
+        è quindi l'apertura ``t+1``. Ogni orizzonte marca separatamente i
+        forecast non sovrapposti, evitando di trattare osservazioni dipendenti
+        come prove indipendenti.
+        """
+
+        forecast_horizon = self.engine.config.forecast_horizon_bars
         rows: list[dict[str, object]] = []
+        horizon_rows: list[dict[str, object]] = []
         close = frame["close"].to_numpy(dtype=float)
+        open_price = frame["open"].to_numpy(dtype=float)
+        next_independent_position = {
+            horizon: 0
+            for horizon in range(1, self.config.maximum_holding_bars + 1)
+        }
+        side_cost = self.config.round_trip_cost_bps / 20_000.0
+
         for position, (_, signal) in enumerate(signals.iterrows()):
             if signal["direction"] != Direction.LONG.value:
                 continue
-            target = position + horizon
-            if target >= len(frame):
+            entry = position + 1
+            if entry >= len(frame):
                 continue
-            realized = float(close[target] / close[position] - 1.0)
-            rows.append(
-                {
+
+            if bool(signal.get("squeeze_release", False)) and float(
+                signal["breakout_strength"]
+            ) > 0.0:
+                entry_path = "BREAKOUT_RELEASE"
+            elif float(signal["breakout_strength"]) > 0.0:
+                entry_path = "BREAKOUT"
+            elif (
+                float(signal["price_acceleration"]) > 0.0
+                and float(signal["squeeze_score"]) > 0.0
+            ):
+                entry_path = "ACCELERATION"
+            else:
+                entry_path = "TREND_CONTINUATION"
+
+            for horizon in range(1, self.config.maximum_holding_bars + 1):
+                target = position + horizon
+                if target >= len(frame):
+                    continue
+                realized = float(close[target] / open_price[entry] - 1.0)
+                signal_close_return = float(
+                    close[target] / close[position] - 1.0
+                )
+                independent = position >= next_independent_position[horizon]
+                if independent:
+                    next_independent_position[horizon] = target
+                row = {
                     "ticker": ticker,
                     "decision_date": frame.index[position],
+                    "entry_date": frame.index[entry],
                     "outcome_date": frame.index[target],
                     "horizon_bars": horizon,
+                    "forecast_horizon_bars": forecast_horizon,
+                    "matches_forecast_horizon": horizon == forecast_horizon,
+                    "independent": independent,
+                    "entry_path": entry_path,
                     "regime": signal["regime"],
                     "confidence": float(signal["confidence"]),
                     "expected_return": float(signal["expected_return"]),
+                    "signal_close_return": signal_close_return,
                     "realized_return": realized,
                     "realized_net_return": (
-                        (1.0 + realized)
-                        * (1.0 - self.config.round_trip_cost_bps / 10_000.0)
-                        - 1.0
+                        (1.0 + realized) * (1.0 - side_cost) ** 2 - 1.0
                     ),
                     "lorentzian_score": float(signal["lorentzian_score"]),
                     "squeeze_score": float(signal["squeeze_score"]),
@@ -173,8 +223,11 @@ class LongBurstBacktester:
                     "raw_score": float(signal["raw_score"]),
                     "opportunity_score": float(signal["opportunity_score"]),
                 }
-            )
-        return pd.DataFrame(rows)
+                horizon_rows.append(row)
+                if horizon == forecast_horizon:
+                    rows.append(row)
+
+        return pd.DataFrame(rows), pd.DataFrame(horizon_rows)
 
     def _simulate_asset(self, ticker: str, data: pd.DataFrame) -> _AssetSimulation:
         frame, _ = self.engine._prepare(data)
@@ -297,6 +350,11 @@ class LongBurstBacktester:
                     }
 
         warmup = min(self.engine.config.minimum_history - 1, count - 1)
+        observations, horizon_observations = self._signal_observations(
+            ticker,
+            frame,
+            signals,
+        )
         return _AssetSimulation(
             returns=pd.Series(
                 strategy_returns,
@@ -316,12 +374,17 @@ class LongBurstBacktester:
             .rename(ticker)
             .iloc[warmup:],
             trades=pd.DataFrame(trades),
-            observations=self._signal_observations(ticker, frame, signals),
+            observations=observations,
+            horizon_observations=horizon_observations,
         )
 
     @staticmethod
-    def _regime_diagnostics(observations: pd.DataFrame) -> pd.DataFrame:
+    def _group_diagnostics(
+        observations: pd.DataFrame,
+        group_column: str,
+    ) -> pd.DataFrame:
         columns = (
+            "all_signals",
             "signals",
             "hit_rate",
             "mean_return",
@@ -330,10 +393,13 @@ class LongBurstBacktester:
             "forecast_correlation",
         )
         if observations.empty:
-            return pd.DataFrame(columns=columns).rename_axis("regime")
+            return pd.DataFrame(columns=columns).rename_axis(group_column)
 
         rows: list[dict[str, object]] = []
-        for regime, group in observations.groupby("regime", sort=True):
+        for group_name, all_rows in observations.groupby(group_column, sort=True):
+            group = all_rows.loc[all_rows["independent"].astype(bool)]
+            if group.empty:
+                continue
             correlation = 0.0
             if len(group) > 1:
                 candidate = float(
@@ -342,7 +408,8 @@ class LongBurstBacktester:
                 correlation = candidate if math.isfinite(candidate) else 0.0
             rows.append(
                 {
-                    "regime": regime,
+                    group_column: group_name,
+                    "all_signals": len(all_rows),
                     "signals": len(group),
                     "hit_rate": float((group["realized_net_return"] > 0.0).mean()),
                     "mean_return": float(group["realized_return"].mean()),
@@ -351,7 +418,9 @@ class LongBurstBacktester:
                     "forecast_correlation": correlation,
                 }
             )
-        return pd.DataFrame(rows).set_index("regime")
+        if not rows:
+            return pd.DataFrame(columns=columns).rename_axis(group_column)
+        return pd.DataFrame(rows).set_index(group_column)
 
     def run(self, markets: Mapping[str, pd.DataFrame]) -> LongBurstBacktestResult:
         if not markets:
@@ -409,6 +478,17 @@ class LongBurstBacktester:
             ],
             ignore_index=True,
         ) if any(not item.observations.empty for item in simulations.values()) else pd.DataFrame()
+        horizon_observations = pd.concat(
+            [
+                item.horizon_observations
+                for item in simulations.values()
+                if not item.horizon_observations.empty
+            ],
+            ignore_index=True,
+        ) if any(
+            not item.horizon_observations.empty
+            for item in simulations.values()
+        ) else pd.DataFrame()
 
         strategy_metrics = _performance_metrics(
             daily_returns,
@@ -444,7 +524,17 @@ class LongBurstBacktester:
             asset_exposure=asset_exposure,
             trades=trades,
             signal_observations=observations,
-            regime_diagnostics=self._regime_diagnostics(observations),
+            horizon_observations=horizon_observations,
+            regime_diagnostics=self._group_diagnostics(observations, "regime"),
+            ticker_diagnostics=self._group_diagnostics(observations, "ticker"),
+            entry_path_diagnostics=self._group_diagnostics(
+                observations,
+                "entry_path",
+            ),
+            horizon_diagnostics=self._group_diagnostics(
+                horizon_observations,
+                "horizon_bars",
+            ),
             errors=errors,
             total_return=strategy_metrics[0],
             cagr=strategy_metrics[1],
@@ -456,6 +546,11 @@ class LongBurstBacktester:
             benchmark_sharpe=benchmark_metrics[3],
             benchmark_max_drawdown=benchmark_metrics[4],
             signal_count=len(observations),
+            independent_signal_count=(
+                int(observations["independent"].astype(bool).sum())
+                if not observations.empty
+                else 0
+            ),
             trade_count=len(trades),
             win_rate=win_rate,
             expectancy=expectancy,

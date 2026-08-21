@@ -41,6 +41,32 @@ def parse_arguments(argv=None):
     return parser.parse_args(argv)
 
 
+def _print_group_diagnostics(
+    title: str,
+    index_label: str,
+    diagnostics,
+    minimum_signals: int,
+) -> None:
+    if diagnostics.empty:
+        return
+    visible = diagnostics.loc[diagnostics["signals"] >= minimum_signals]
+    if visible.empty:
+        return
+    print(f"\n{title}")
+    print(
+        f"{index_label:22} {'N_IND':>6} {'N_ALL':>6} {'HIT':>8} "
+        f"{'NET':>10} {'CONF':>8} {'CORR':>8}"
+    )
+    for group_name, row in visible.iterrows():
+        print(
+            f"{str(group_name):22} {int(row['signals']):6d} "
+            f"{int(row['all_signals']):6d} {row['hit_rate']:8.2%} "
+            f"{row['mean_net_return']:10.3%} "
+            f"{row['mean_confidence']:8.2%} "
+            f"{row['forecast_correlation']:8.3f}"
+        )
+
+
 def _print_primary_result(result, diagnostic_min_signals: int) -> None:
     print("\nLONG BURST MOMENTUM V1 — CHALLENGER RESEARCH-ONLY")
     print("Segnali ammessi: LONG / NO_TRADE. Leva: assente. Broker: assente.")
@@ -53,7 +79,8 @@ def _print_primary_result(result, diagnostic_min_signals: int) -> None:
     print(f"Volatilità annuale:     {result.annualized_volatility:10.2%}")
     print(f"Sharpe:                 {result.sharpe:10.2f}")
     print(f"Max drawdown:           {result.max_drawdown:10.2%}")
-    print(f"Segnali maturati:       {result.signal_count:10d}")
+    print(f"Segnali maturati totali:{result.signal_count:10d}")
+    print(f"Segnali indipendenti:   {result.independent_signal_count:10d}")
     print(f"Operazioni simulate:    {result.trade_count:10d}")
     print(f"Win rate:               {result.win_rate:10.2%}")
     print(f"Expectancy per trade:   {result.expectancy:10.3%}")
@@ -78,22 +105,48 @@ def _print_primary_result(result, diagnostic_min_signals: int) -> None:
         print("\nMOTIVI DI USCITA")
         for reason, count in result.trades["exit_reason"].value_counts().items():
             print(f"{reason:20} {int(count):6d}")
-
-    if not result.regime_diagnostics.empty:
-        print("\nDIAGNOSTICA SEGNALE × REGIME")
-        print(
-            f"{'REGIME':16} {'N':>6} {'HIT':>8} {'NET':>10} "
-            f"{'CONF':>8} {'CORR':>8}"
+        signal_decay = int(
+            (result.trades["exit_reason"] == "SIGNAL_DECAY").sum()
         )
-        for regime, row in result.regime_diagnostics.iterrows():
-            if int(row["signals"]) < diagnostic_min_signals:
-                continue
+        if signal_decay / len(result.trades) >= 0.50:
+            print("\nAUDIT USCITE")
             print(
-                f"{str(regime):16} {int(row['signals']):6d} "
-                f"{row['hit_rate']:8.2%} {row['mean_net_return']:10.3%} "
-                f"{row['mean_confidence']:8.2%} "
-                f"{row['forecast_correlation']:8.3f}"
+                "- Oltre metà delle simulazioni termina perché il gate "
+                "LONG torna NO_TRADE."
             )
+            print(
+                "- NO_TRADE non equivale a previsione ribassista: questa "
+                "uscita va trattata come ipotesi da validare, non come alpha."
+            )
+
+    print(
+        "\nGli outcome diagnostici partono dall'apertura successiva e le "
+        "metriche usano N_IND, il sottocampione non sovrapposto."
+    )
+    _print_group_diagnostics(
+        "DIAGNOSTICA SEGNALE × REGIME",
+        "REGIME",
+        result.regime_diagnostics,
+        diagnostic_min_signals,
+    )
+    _print_group_diagnostics(
+        "DIAGNOSTICA SEGNALE × TICKER",
+        "TICKER",
+        result.ticker_diagnostics,
+        diagnostic_min_signals,
+    )
+    _print_group_diagnostics(
+        "DIAGNOSTICA SEGNALE × ENTRY PATH",
+        "ENTRY_PATH",
+        result.entry_path_diagnostics,
+        diagnostic_min_signals,
+    )
+    _print_group_diagnostics(
+        "DIAGNOSTICA SEGNALE × ORIZZONTE",
+        "BARRE",
+        result.horizon_diagnostics,
+        diagnostic_min_signals,
+    )
 
 
 def _print_promotion_gate(champion, challenger, annualization_factor: int) -> None:
