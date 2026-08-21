@@ -40,6 +40,13 @@ python -m adaptive.run_adaptive_scan --tickers SPY QQQ GLD --journal :memory:
 ## Documentazione
 
 - [Architettura Adaptive Multi-Market](docs/adaptive_system.md)
+- [Long Burst Momentum V1](docs/long_burst_momentum.md), Challenger long-only
+  da 1–5 barre con CHOP, Lorentzian, Squeeze e CMF:
+
+  ```powershell
+  python -m adaptive.run_long_burst_backtest --period 5y --interval 1d --horizon-bars 3 --max-holding-bars 5 --cost-bps 10 --tickers SPY QQQ IWM EFA EEM SHY IEF TLT GLD SLV USO DBA UUP FXE FXY
+  ```
+
 - Ricerca multi-asset esistente:
 
   ```powershell
