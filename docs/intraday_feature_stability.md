@@ -59,6 +59,23 @@ l'ultimo livello e uno dei seguenti pattern:
 La persistenza riduce il rischio di attribuire importanza a un singolo massimo
 casuale, ma quattro blocchi restano un campione molto piccolo.
 
+## Calibrazione per piccoli campioni
+
+Le fasi `OPEN` e `CLOSE` contengono soltanto quattro barre per sessione. Con
+blocchi da 15 sessioni il PSI grezzo può quindi apparire elevato anche quando
+due campioni provengono dalla stessa distribuzione. Il report applica due
+salvaguardie:
+
+- una pseudocount di Jeffreys evita che un bin vuoto produca valori estremi;
+- 96 riassegnazioni deterministiche di sessioni intere stimano il 95°
+  percentile del rumore atteso per PSI e spostamento mediano.
+
+Un'etichetta numerica può diventare `MODERATE_SHIFT` o `HIGH_SHIFT` soltanto se
+supera sia la soglia assoluta dichiarata sia la soglia empirica. Le colonne
+`PSI_EX` e `MED_EX` mostrano la parte eccedente tale soglia. Le sessioni vengono
+riassegnate come unità, preservando la dipendenza tra le barre della stessa
+giornata.
+
 Per `squeeze_state` e `chop_segment` viene usata la distanza di variazione
 totale tra le frequenze delle categorie. Il report calcola inoltre:
 
@@ -76,6 +93,12 @@ IWM condividono infatti una parte importante del rischio di mercato.
 
 La ridondanza elevata non elimina automaticamente alcuna feature: segnala
 soltanto che due descrittori hanno raccontato informazioni simili nel campione.
+
+Il riepilogo cross-asset usa le etichette calibrate e descrive l'ultimo
+cambiamento come `NO_SHARED_SHIFT`, `ISOLATED_ASSET_SHIFT`,
+`MIXED_ASSET_SHIFT` o `COMMON_SHIFT`. Queste categorie distinguono la portata
+del cambiamento, non la sua direzione o utilità. Poiché gli ETF osservati sono
+correlati, i conteggi non equivalgono a osservazioni statistiche indipendenti.
 
 ## Esecuzione locale
 

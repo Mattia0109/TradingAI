@@ -60,6 +60,7 @@ def compact_config(**overrides) -> IntradayStabilityConfig:
         "sessions_per_block": 5,
         "minimum_complete_blocks": 3,
         "minimum_valid_rows_per_block": 20,
+        "calibration_permutations": 24,
     }
     values.update(overrides)
     return IntradayStabilityConfig(**values)
@@ -71,6 +72,9 @@ def test_configuration_rejects_unordered_session_phases() -> None:
             open_phase_end=time(15, 30),
             close_phase_start=time(10, 30),
         )
+
+    with pytest.raises(ValueError, match="calibration_permutations"):
+        IntradayStabilityConfig(calibration_permutations=19)
 
 
 def test_regular_session_frame_excludes_extended_hours_and_weekends() -> None:
@@ -220,6 +224,42 @@ def test_phase_drift_keeps_separate_session_buckets() -> None:
         "MID_SESSION",
         "CLOSE",
     }
+    assert {
+        "null_psi_quantile",
+        "null_median_shift_quantile",
+        "psi_excess",
+        "median_shift_excess",
+    }.issubset(report.phase_drift.columns)
+
+
+def test_session_calibration_rejects_small_sample_psi_false_persistence() -> None:
+    random = np.random.default_rng(20260823)
+    values = feature_values(60)
+    for feature in (
+        "squeeze_momentum_pct_close",
+        "squeeze_momentum_change_pct_close",
+        "choppiness",
+        "cmf",
+    ):
+        values[feature] = random.normal(size=len(values))
+
+    report = IntradayFeatureStabilityAnalyzer().analyze("NULL", values)
+    persistent = report.phase_persistence["pattern"].isin(
+        {"PERSISTENT_ELEVATED", "PERSISTENT_HIGH"}
+    )
+
+    assert not persistent.any()
+    assert report.phase_drift["null_psi_quantile"].notna().all()
+
+
+def test_calibrated_phase_drift_is_deterministic() -> None:
+    analyzer = IntradayFeatureStabilityAnalyzer(compact_config())
+    values = feature_values(15)
+
+    first = analyzer.analyze("SPY", values)
+    second = analyzer.analyze("SPY", values)
+
+    pd.testing.assert_frame_equal(first.phase_drift, second.phase_drift)
 
 
 def test_cross_asset_consensus_counts_phase_persistence_without_ranking() -> None:
@@ -252,6 +292,8 @@ def test_cross_asset_consensus_counts_phase_persistence_without_ranking() -> Non
     assert row["sufficient_assets"] == 3
     assert row["persistent_assets"] == 2
     assert row["persistent_high_assets"] == 2
+    assert row["persistent_fraction"] == pytest.approx(2.0 / 3.0)
+    assert row["cross_asset_scope"] == "MIXED_ASSET_SHIFT"
 
 
 def test_redundancy_report_flags_near_duplicate_features() -> None:

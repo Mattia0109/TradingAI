@@ -40,6 +40,9 @@ class IntradayStabilityConfig:
     minimum_complete_blocks: int = 3
     minimum_valid_rows_per_block: int = 40
     psi_bins: int = 8
+    calibration_permutations: int = 96
+    calibration_quantile: float = 0.95
+    calibration_seed: int = 20260823
     moderate_psi: float = 0.10
     high_psi: float = 0.25
     moderate_median_shift_iqr: float = 0.75
@@ -75,6 +78,12 @@ class IntradayStabilityConfig:
             raise ValueError("minimum_valid_rows_per_block deve essere positivo.")
         if int(self.psi_bins) < 3:
             raise ValueError("psi_bins deve essere almeno 3.")
+        if int(self.calibration_permutations) < 20:
+            raise ValueError("calibration_permutations deve essere almeno 20.")
+        if not 0.5 < float(self.calibration_quantile) < 1.0:
+            raise ValueError("calibration_quantile deve essere in (0.5, 1).")
+        if int(self.calibration_seed) < 0:
+            raise ValueError("calibration_seed non può essere negativo.")
         if not 0.0 < self.moderate_psi < self.high_psi:
             raise ValueError("Le soglie PSI non sono ordinate.")
         if not (
@@ -115,6 +124,19 @@ class IntradayStabilityReport:
     phase_persistence: pd.DataFrame
     redundancy: pd.DataFrame
     research_only: bool = True
+
+
+@dataclass(frozen=True)
+class _NumericShiftEvidence:
+    """Misure grezze e soglie empiriche; resta un dettaglio interno."""
+
+    psi: float
+    median_shift_iqr: float
+    null_psi_quantile: float
+    null_median_shift_quantile: float
+    psi_excess: float
+    median_shift_excess: float
+    shift: str
 
 
 def _localized_timestamps(
@@ -243,12 +265,16 @@ class IntradayFeatureStabilityAnalyzer:
         edges = np.concatenate(([-np.inf], inner_edges, [np.inf]))
         reference_counts, _ = np.histogram(reference_values, bins=edges)
         current_counts, _ = np.histogram(current_values, bins=edges)
-        epsilon = 1e-6
-        reference_share = np.clip(
-            reference_counts / reference_counts.sum(), epsilon, None
+        pseudocount = 0.5
+        reference_share = (
+            reference_counts + pseudocount
+        ) / (
+            reference_counts.sum() + pseudocount * len(reference_counts)
         )
-        current_share = np.clip(
-            current_counts / current_counts.sum(), epsilon, None
+        current_share = (
+            current_counts + pseudocount
+        ) / (
+            current_counts.sum() + pseudocount * len(current_counts)
         )
         return float(
             np.sum(
@@ -257,16 +283,110 @@ class IntradayFeatureStabilityAnalyzer:
             )
         )
 
-    def _shift_level(self, psi: float, median_shift_iqr: float) -> DistributionShift:
+    @staticmethod
+    def _median_shift_iqr(
+        reference: pd.Series,
+        current: pd.Series,
+    ) -> float:
+        q25 = float(reference.quantile(0.25))
+        q75 = float(reference.quantile(0.75))
+        scale = max(
+            q75 - q25,
+            abs(float(reference.median())) * 1e-6,
+            1e-12,
+        )
+        return (
+            abs(float(current.median()) - float(reference.median()))
+            / scale
+        )
+
+    def _calibration_null(
+        self,
+        reference: pd.Series,
+        current: pd.Series,
+    ) -> tuple[float, float]:
+        """Stima il rumore riassegnando sessioni intere fra blocchi adiacenti."""
+
+        if not isinstance(reference.index, pd.DatetimeIndex):
+            return math.nan, math.nan
+        if not isinstance(current.index, pd.DatetimeIndex):
+            return math.nan, math.nan
+        reference_sessions = pd.Index(reference.index.date).unique()
+        current_sessions = pd.Index(current.index.date).unique()
+        if len(reference_sessions) < 2 or len(current_sessions) < 2:
+            return math.nan, math.nan
+        if set(reference_sessions).intersection(current_sessions):
+            return math.nan, math.nan
+
+        combined = pd.concat([reference, current]).sort_index()
+        session_labels = np.asarray(combined.index.date, dtype=object)
+        sessions = pd.Index(session_labels).unique().to_numpy(dtype=object)
+        reference_session_count = len(reference_sessions)
+        if len(sessions) != reference_session_count + len(current_sessions):
+            return math.nan, math.nan
+
+        first_ordinal = pd.Timestamp(sessions[0]).toordinal()
+        last_ordinal = pd.Timestamp(sessions[-1]).toordinal()
+        seed = (
+            int(self.config.calibration_seed)
+            + first_ordinal * 1009
+            + last_ordinal * 9176
+            + len(sessions) * 53
+        ) % (2**32)
+        random = np.random.default_rng(seed)
+        null_psi: list[float] = []
+        null_median: list[float] = []
+        for _ in range(self.config.calibration_permutations):
+            selected = random.choice(
+                len(sessions),
+                size=reference_session_count,
+                replace=False,
+            )
+            left_sessions = sessions[selected]
+            left_mask = np.isin(session_labels, left_sessions)
+            left = combined.iloc[np.flatnonzero(left_mask)]
+            right = combined.iloc[np.flatnonzero(~left_mask)]
+            if (
+                len(left) < self.config.minimum_valid_rows_per_block
+                or len(right) < self.config.minimum_valid_rows_per_block
+            ):
+                continue
+            null_psi.append(
+                self._population_stability_index(
+                    left,
+                    right,
+                    self.config.psi_bins,
+                )
+            )
+            null_median.append(self._median_shift_iqr(left, right))
+
+        minimum_calibrations = min(20, self.config.calibration_permutations)
+        if len(null_psi) < minimum_calibrations:
+            return math.nan, math.nan
+        quantile = self.config.calibration_quantile
+        return (
+            float(np.quantile(null_psi, quantile)),
+            float(np.quantile(null_median, quantile)),
+        )
+
+    def _shift_level(
+        self,
+        psi: float,
+        median_shift_iqr: float,
+        null_psi_quantile: float,
+        null_median_shift_quantile: float,
+    ) -> DistributionShift:
         config = self.config
-        if (
-            psi >= config.high_psi
-            or median_shift_iqr >= config.high_median_shift_iqr
+        psi_above_null = psi > null_psi_quantile
+        median_above_null = median_shift_iqr > null_median_shift_quantile
+        if (psi_above_null and psi >= config.high_psi) or (
+            median_above_null
+            and median_shift_iqr >= config.high_median_shift_iqr
         ):
             return DistributionShift.HIGH_SHIFT
-        if (
-            psi >= config.moderate_psi
-            or median_shift_iqr >= config.moderate_median_shift_iqr
+        if (psi_above_null and psi >= config.moderate_psi) or (
+            median_above_null
+            and median_shift_iqr >= config.moderate_median_shift_iqr
         ):
             return DistributionShift.MODERATE_SHIFT
         return DistributionShift.LOW_SHIFT
@@ -358,30 +478,55 @@ class IntradayFeatureStabilityAnalyzer:
         self,
         reference: pd.Series,
         observed: pd.Series,
-    ) -> tuple[float, float, str]:
+    ) -> _NumericShiftEvidence:
         enough = (
             len(reference) >= self.config.minimum_valid_rows_per_block
             and len(observed) >= self.config.minimum_valid_rows_per_block
         )
         if not enough:
-            return math.nan, math.nan, "INSUFFICIENT"
+            return _NumericShiftEvidence(
+                psi=math.nan,
+                median_shift_iqr=math.nan,
+                null_psi_quantile=math.nan,
+                null_median_shift_quantile=math.nan,
+                psi_excess=math.nan,
+                median_shift_excess=math.nan,
+                shift="INSUFFICIENT",
+            )
         psi = self._population_stability_index(
             reference,
             observed,
             self.config.psi_bins,
         )
-        q25 = float(reference.quantile(0.25))
-        q75 = float(reference.quantile(0.75))
-        scale = max(
-            q75 - q25,
-            abs(float(reference.median())) * 1e-6,
-            1e-12,
+        median_shift = self._median_shift_iqr(reference, observed)
+        null_psi, null_median = self._calibration_null(reference, observed)
+        if not math.isfinite(null_psi) or not math.isfinite(null_median):
+            return _NumericShiftEvidence(
+                psi=psi,
+                median_shift_iqr=median_shift,
+                null_psi_quantile=null_psi,
+                null_median_shift_quantile=null_median,
+                psi_excess=math.nan,
+                median_shift_excess=math.nan,
+                shift="INSUFFICIENT",
+            )
+        psi_excess = max(0.0, psi - null_psi)
+        median_excess = max(0.0, median_shift - null_median)
+        level = self._shift_level(
+            psi,
+            median_shift,
+            null_psi,
+            null_median,
         )
-        median_shift = (
-            abs(float(observed.median()) - float(reference.median()))
-            / scale
+        return _NumericShiftEvidence(
+            psi=psi,
+            median_shift_iqr=median_shift,
+            null_psi_quantile=null_psi,
+            null_median_shift_quantile=null_median,
+            psi_excess=psi_excess,
+            median_shift_excess=median_excess,
+            shift=level.value,
         )
-        return psi, median_shift, self._shift_level(psi, median_shift).value
 
     def _prepare_values(self, values: pd.DataFrame) -> tuple[pd.DataFrame, int]:
         if not isinstance(values, pd.DataFrame):
@@ -482,7 +627,7 @@ class IntradayFeatureStabilityAnalyzer:
             for feature in self.config.numeric_features:
                 reference = pd.to_numeric(previous[feature], errors="coerce").dropna()
                 observed = pd.to_numeric(current[feature], errors="coerce").dropna()
-                psi, shift, level = self._numeric_shift(
+                evidence = self._numeric_shift(
                     reference,
                     observed,
                 )
@@ -494,9 +639,15 @@ class IntradayFeatureStabilityAnalyzer:
                         "current_block": current_block,
                         "reference_rows": int(len(reference)),
                         "current_rows": int(len(observed)),
-                        "psi": psi,
-                        "median_shift_iqr": shift,
-                        "shift": level,
+                        "psi": evidence.psi,
+                        "median_shift_iqr": evidence.median_shift_iqr,
+                        "null_psi_quantile": evidence.null_psi_quantile,
+                        "null_median_shift_quantile": (
+                            evidence.null_median_shift_quantile
+                        ),
+                        "psi_excess": evidence.psi_excess,
+                        "median_shift_excess": evidence.median_shift_excess,
+                        "shift": evidence.shift,
                     }
                 )
         numeric_drift = pd.DataFrame(drift_rows)
@@ -505,6 +656,8 @@ class IntradayFeatureStabilityAnalyzer:
             {
                 "max_psi": "psi",
                 "max_median_shift_iqr": "median_shift_iqr",
+                "max_psi_excess": "psi_excess",
+                "max_median_shift_excess": "median_shift_excess",
             },
         )
 
@@ -601,7 +754,7 @@ class IntradayFeatureStabilityAnalyzer:
                         current_phase[feature],
                         errors="coerce",
                     ).dropna()
-                    psi, median_shift, level = self._numeric_shift(
+                    evidence = self._numeric_shift(
                         reference,
                         observed,
                     )
@@ -614,9 +767,17 @@ class IntradayFeatureStabilityAnalyzer:
                             "current_block": current_block,
                             "reference_rows": int(len(reference)),
                             "current_rows": int(len(observed)),
-                            "psi": psi,
-                            "median_shift_iqr": median_shift,
-                            "shift": level,
+                            "psi": evidence.psi,
+                            "median_shift_iqr": evidence.median_shift_iqr,
+                            "null_psi_quantile": evidence.null_psi_quantile,
+                            "null_median_shift_quantile": (
+                                evidence.null_median_shift_quantile
+                            ),
+                            "psi_excess": evidence.psi_excess,
+                            "median_shift_excess": (
+                                evidence.median_shift_excess
+                            ),
+                            "shift": evidence.shift,
                         }
                     )
         phase_drift = pd.DataFrame(phase_drift_rows)
@@ -625,6 +786,8 @@ class IntradayFeatureStabilityAnalyzer:
             {
                 "max_psi": "psi",
                 "max_median_shift_iqr": "median_shift_iqr",
+                "max_psi_excess": "psi_excess",
+                "max_median_shift_excess": "median_shift_excess",
             },
             group_columns=("ticker", "feature", "phase"),
         )
@@ -692,6 +855,9 @@ def summarize_cross_asset_phase_consensus(
         "persistent_high_assets",
         "latest_elevated_assets",
         "latest_high_assets",
+        "persistent_fraction",
+        "latest_elevated_fraction",
+        "cross_asset_scope",
     ]
     tables = [
         report.phase_persistence
@@ -716,30 +882,43 @@ def summarize_cross_asset_phase_consensus(
         sort=True,
     ):
         sufficient = group.loc[group["pattern"] != "INSUFFICIENT"]
+        sufficient_count = int(sufficient["ticker"].nunique())
+        persistent_count = int(
+            sufficient.loc[
+                sufficient["pattern"].isin(persistent_patterns),
+                "ticker",
+            ].nunique()
+        )
+        latest_elevated_count = int(
+            sufficient.loc[
+                sufficient["latest_shift"].isin(elevated_levels),
+                "ticker",
+            ].nunique()
+        )
+        if sufficient_count < 2:
+            scope = "INSUFFICIENT"
+        elif latest_elevated_count == 0:
+            scope = "NO_SHARED_SHIFT"
+        elif latest_elevated_count == sufficient_count:
+            scope = "COMMON_SHIFT"
+        elif latest_elevated_count == 1:
+            scope = "ISOLATED_ASSET_SHIFT"
+        else:
+            scope = "MIXED_ASSET_SHIFT"
         rows.append(
             {
                 "feature": feature,
                 "phase": phase,
                 "assets": int(group["ticker"].nunique()),
-                "sufficient_assets": int(sufficient["ticker"].nunique()),
-                "persistent_assets": int(
-                    sufficient.loc[
-                        sufficient["pattern"].isin(persistent_patterns),
-                        "ticker",
-                    ].nunique()
-                ),
+                "sufficient_assets": sufficient_count,
+                "persistent_assets": persistent_count,
                 "persistent_high_assets": int(
                     sufficient.loc[
                         sufficient["pattern"] == "PERSISTENT_HIGH",
                         "ticker",
                     ].nunique()
                 ),
-                "latest_elevated_assets": int(
-                    sufficient.loc[
-                        sufficient["latest_shift"].isin(elevated_levels),
-                        "ticker",
-                    ].nunique()
-                ),
+                "latest_elevated_assets": latest_elevated_count,
                 "latest_high_assets": int(
                     sufficient.loc[
                         sufficient["latest_shift"]
@@ -747,6 +926,17 @@ def summarize_cross_asset_phase_consensus(
                         "ticker",
                     ].nunique()
                 ),
+                "persistent_fraction": (
+                    persistent_count / sufficient_count
+                    if sufficient_count
+                    else math.nan
+                ),
+                "latest_elevated_fraction": (
+                    latest_elevated_count / sufficient_count
+                    if sufficient_count
+                    else math.nan
+                ),
+                "cross_asset_scope": scope,
             }
         )
     return pd.DataFrame(rows, columns=columns)

@@ -97,6 +97,10 @@ def main(argv=None) -> int:
     print("I blocchi sono fissi: nuovi dati non riassegnano le sessioni passate.")
     print("Le feature vengono calcolate dopo aver escluso extended-hours e weekend.")
     print("Le feature Squeeze del drift sono dimensionless, divise per il close.")
+    print(
+        "Le etichette numeriche superano anche una soglia empirica ottenuta "
+        "riassegnando sessioni intere."
+    )
 
     print("\nCOPERTURA BLOCCHI")
     print(f"{'TICKER':10} {'SESSIONI':>9} {'BLOCCHI':>8} {'ESCLUSE':>8} {'STATO':>20}")
@@ -115,15 +119,16 @@ def main(argv=None) -> int:
     print("\nPERSISTENZA DRIFT FEATURE NUMERICHE")
     print(
         f"{'TICKER':10} {'FEATURE':36} {'N':>3} {'ELEV':>4} {'HIGH':>4} "
-        f"{'RUN':>3} {'MAX_PSI':>8} {'MAX_MED':>8} "
+        f"{'RUN':>3} {'MAX_PSI':>8} {'PSI_EX':>8} "
+        f"{'MAX_MED':>8} {'MED_EX':>8} "
         f"{'LATEST':>16} {'PATTERN':>20}"
     )
-    print("-" * 128)
+    print("-" * 148)
     for report in sorted(reports, key=lambda item: item.ticker):
         if report.numeric_persistence.empty:
             print(
                 f"{report.ticker:10} {'-':36} {'0':>3} {'0':>4} {'0':>4} "
-                f"{'0':>3} {'n/a':>8} {'n/a':>8} "
+                f"{'0':>3} {'n/a':>8} {'n/a':>8} {'n/a':>8} {'n/a':>8} "
                 f"{'INSUFFICIENT':>16} {'INSUFFICIENT':>20}"
             )
             continue
@@ -132,7 +137,9 @@ def main(argv=None) -> int:
                 f"{row.ticker:10} {row.feature:36} "
                 f"{row.transitions:3d} {row.elevated_transitions:4d} "
                 f"{row.high_transitions:4d} {row.longest_elevated_run:3d} "
-                f"{row.max_psi:8.3f} {row.max_median_shift_iqr:8.3f} "
+                f"{row.max_psi:8.3f} {row.max_psi_excess:8.3f} "
+                f"{row.max_median_shift_iqr:8.3f} "
+                f"{row.max_median_shift_excess:8.3f} "
                 f"{row.latest_shift:>16} {row.pattern:>20}"
             )
 
@@ -181,9 +188,10 @@ def main(argv=None) -> int:
     print("\nCONSENSO DESCRITTIVO CROSS-ASSET PER FASE")
     print(
         f"{'FEATURE':36} {'PHASE':12} {'ASSET':>5} {'VALID':>5} "
-        f"{'PERSIST':>7} {'P_HIGH':>7} {'LATEST':>6} {'L_HIGH':>6}"
+        f"{'PERSIST':>7} {'P_HIGH':>7} {'LATEST':>6} {'L_HIGH':>6} "
+        f"{'SCOPE':>20}"
     )
-    print("-" * 94)
+    print("-" * 116)
     consensus = summarize_cross_asset_phase_consensus(reports)
     if consensus.empty:
         print("- Evidenza insufficiente per il confronto cross-asset.")
@@ -194,7 +202,8 @@ def main(argv=None) -> int:
                 f"{row.sufficient_assets:5d} {row.persistent_assets:7d} "
                 f"{row.persistent_high_assets:7d} "
                 f"{row.latest_elevated_assets:6d} "
-                f"{row.latest_high_assets:6d}"
+                f"{row.latest_high_assets:6d} "
+                f"{row.cross_asset_scope:>20}"
             )
     print("Gli asset sono correlati: i conteggi non sono osservazioni indipendenti.")
 
