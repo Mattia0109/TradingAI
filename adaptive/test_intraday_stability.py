@@ -12,6 +12,7 @@ from adaptive.intraday_stability import (
     IntradayStabilityConfig,
     add_dimensionless_squeeze_features,
     regular_session_frame,
+    summarize_cross_asset_phase_consensus,
 )
 
 
@@ -206,6 +207,53 @@ def test_phase_summary_uses_open_middle_and_close_buckets() -> None:
     assert squeeze.loc["CLOSE", "rows"] == 15 * 4
 
 
+def test_phase_drift_keeps_separate_session_buckets() -> None:
+    report = IntradayFeatureStabilityAnalyzer(compact_config()).analyze(
+        "SPY",
+        feature_values(15),
+    )
+
+    assert len(report.phase_drift) == 2 * 3 * 4
+    assert len(report.phase_persistence) == 3 * 4
+    assert set(report.phase_persistence["phase"]) == {
+        "OPEN",
+        "MID_SESSION",
+        "CLOSE",
+    }
+
+
+def test_cross_asset_consensus_counts_phase_persistence_without_ranking() -> None:
+    values = feature_values(20)
+    bar = np.tile(np.arange(26), 20)
+    values["cmf"] = 0.10 * np.sin(bar / 4.0)
+    sessions = pd.Series(values.index.date, index=values.index)
+    ordered_sessions = sorted(sessions.unique())
+    close_phase = values.index.hour >= 15
+
+    shifted = values.copy()
+    block_three = sessions.isin(ordered_sessions[10:15]) & close_phase
+    block_four = sessions.isin(ordered_sessions[15:20]) & close_phase
+    shifted.loc[block_three, "cmf"] += 1.0
+    shifted.loc[block_four, "cmf"] += 2.0
+    analyzer = IntradayFeatureStabilityAnalyzer(compact_config())
+    reports = [
+        analyzer.analyze("AAA", shifted),
+        analyzer.analyze("BBB", shifted),
+        analyzer.analyze("CCC", values),
+    ]
+
+    consensus = summarize_cross_asset_phase_consensus(reports)
+    row = consensus.loc[
+        (consensus["feature"] == "cmf")
+        & (consensus["phase"] == "CLOSE")
+    ].iloc[0]
+
+    assert row["assets"] == 3
+    assert row["sufficient_assets"] == 3
+    assert row["persistent_assets"] == 2
+    assert row["persistent_high_assets"] == 2
+
+
 def test_redundancy_report_flags_near_duplicate_features() -> None:
     values = feature_values(15)
     values["cmf"] = values["squeeze_momentum_pct_close"] * 0.5
@@ -244,6 +292,8 @@ def test_report_contains_no_operational_or_future_outcome_fields() -> None:
         report.state_drift,
         report.state_persistence,
         report.phase_summary,
+        report.phase_drift,
+        report.phase_persistence,
         report.redundancy,
     ):
         assert forbidden.isdisjoint(str(column).lower() for column in table.columns)

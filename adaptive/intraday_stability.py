@@ -111,6 +111,8 @@ class IntradayStabilityReport:
     state_drift: pd.DataFrame
     state_persistence: pd.DataFrame
     phase_summary: pd.DataFrame
+    phase_drift: pd.DataFrame
+    phase_persistence: pd.DataFrame
     redundancy: pd.DataFrame
     research_only: bool = True
 
@@ -282,10 +284,10 @@ class IntradayFeatureStabilityAnalyzer:
         self,
         drift: pd.DataFrame,
         metrics: dict[str, str],
+        group_columns: tuple[str, ...] = ("ticker", "feature"),
     ) -> pd.DataFrame:
         columns = [
-            "ticker",
-            "feature",
+            *group_columns,
             "transitions",
             "elevated_transitions",
             "high_transitions",
@@ -297,10 +299,13 @@ class IntradayFeatureStabilityAnalyzer:
         if drift.empty:
             return pd.DataFrame(columns=columns)
         rows: list[dict[str, object]] = []
-        for (ticker, feature), group in drift.groupby(
-            ["ticker", "feature"],
+        for group_key, group in drift.groupby(
+            list(group_columns),
             sort=True,
         ):
+            key_values = (
+                group_key if isinstance(group_key, tuple) else (group_key,)
+            )
             ordered = group.sort_values("current_block")
             valid = ordered.loc[ordered["shift"] != "INSUFFICIENT"]
             levels = valid["shift"].astype(str).tolist()
@@ -333,8 +338,6 @@ class IntradayFeatureStabilityAnalyzer:
                 pattern = "LOW_OR_NONE"
                 latest = levels[-1]
             row: dict[str, object] = {
-                "ticker": ticker,
-                "feature": feature,
                 "transitions": len(levels),
                 "elevated_transitions": int(sum(elevated)),
                 "high_transitions": int(sum(high)),
@@ -342,6 +345,7 @@ class IntradayFeatureStabilityAnalyzer:
                 "latest_shift": latest,
                 "pattern": pattern,
             }
+            row.update(dict(zip(group_columns, key_values)))
             for output_name, source_name in metrics.items():
                 numeric = pd.to_numeric(valid[source_name], errors="coerce").dropna()
                 row[output_name] = (
@@ -349,6 +353,35 @@ class IntradayFeatureStabilityAnalyzer:
                 )
             rows.append(row)
         return pd.DataFrame(rows, columns=columns)
+
+    def _numeric_shift(
+        self,
+        reference: pd.Series,
+        observed: pd.Series,
+    ) -> tuple[float, float, str]:
+        enough = (
+            len(reference) >= self.config.minimum_valid_rows_per_block
+            and len(observed) >= self.config.minimum_valid_rows_per_block
+        )
+        if not enough:
+            return math.nan, math.nan, "INSUFFICIENT"
+        psi = self._population_stability_index(
+            reference,
+            observed,
+            self.config.psi_bins,
+        )
+        q25 = float(reference.quantile(0.25))
+        q75 = float(reference.quantile(0.75))
+        scale = max(
+            q75 - q25,
+            abs(float(reference.median())) * 1e-6,
+            1e-12,
+        )
+        median_shift = (
+            abs(float(observed.median()) - float(reference.median()))
+            / scale
+        )
+        return psi, median_shift, self._shift_level(psi, median_shift).value
 
     def _prepare_values(self, values: pd.DataFrame) -> tuple[pd.DataFrame, int]:
         if not isinstance(values, pd.DataFrame):
@@ -449,35 +482,10 @@ class IntradayFeatureStabilityAnalyzer:
             for feature in self.config.numeric_features:
                 reference = pd.to_numeric(previous[feature], errors="coerce").dropna()
                 observed = pd.to_numeric(current[feature], errors="coerce").dropna()
-                enough = (
-                    len(reference) >= self.config.minimum_valid_rows_per_block
-                    and len(observed) >= self.config.minimum_valid_rows_per_block
+                psi, shift, level = self._numeric_shift(
+                    reference,
+                    observed,
                 )
-                if not enough:
-                    psi = math.nan
-                    shift = math.nan
-                    level: str = "INSUFFICIENT"
-                else:
-                    psi = self._population_stability_index(
-                        reference,
-                        observed,
-                        self.config.psi_bins,
-                    )
-                    q25 = float(reference.quantile(0.25))
-                    q75 = float(reference.quantile(0.75))
-                    scale = max(
-                        q75 - q25,
-                        abs(float(reference.median())) * 1e-6,
-                        1e-12,
-                    )
-                    shift = (
-                        abs(
-                            float(observed.median())
-                            - float(reference.median())
-                        )
-                        / scale
-                    )
-                    level = self._shift_level(psi, shift).value
                 drift_rows.append(
                     {
                         "ticker": normalized_ticker,
@@ -570,6 +578,57 @@ class IntradayFeatureStabilityAnalyzer:
                 )
         phase_summary = pd.DataFrame(phase_rows)
 
+        phase_drift_rows: list[dict[str, object]] = []
+        phases = tuple(sorted(complete["session_phase"].unique()))
+        for previous_block, current_block in zip(
+            complete_block_ids[:-1], complete_block_ids[1:]
+        ):
+            previous = complete.loc[complete["block"] == previous_block]
+            current = complete.loc[complete["block"] == current_block]
+            for phase in phases:
+                previous_phase = previous.loc[
+                    previous["session_phase"] == phase
+                ]
+                current_phase = current.loc[
+                    current["session_phase"] == phase
+                ]
+                for feature in self.config.numeric_features:
+                    reference = pd.to_numeric(
+                        previous_phase[feature],
+                        errors="coerce",
+                    ).dropna()
+                    observed = pd.to_numeric(
+                        current_phase[feature],
+                        errors="coerce",
+                    ).dropna()
+                    psi, median_shift, level = self._numeric_shift(
+                        reference,
+                        observed,
+                    )
+                    phase_drift_rows.append(
+                        {
+                            "ticker": normalized_ticker,
+                            "feature": feature,
+                            "phase": phase,
+                            "reference_block": previous_block,
+                            "current_block": current_block,
+                            "reference_rows": int(len(reference)),
+                            "current_rows": int(len(observed)),
+                            "psi": psi,
+                            "median_shift_iqr": median_shift,
+                            "shift": level,
+                        }
+                    )
+        phase_drift = pd.DataFrame(phase_drift_rows)
+        phase_persistence = self._persistence_summary(
+            phase_drift,
+            {
+                "max_psi": "psi",
+                "max_median_shift_iqr": "median_shift_iqr",
+            },
+            group_columns=("ticker", "feature", "phase"),
+        )
+
         redundancy_rows: list[dict[str, object]] = []
         numeric_frame = complete.loc[:, self.config.numeric_features].apply(
             pd.to_numeric,
@@ -613,5 +672,81 @@ class IntradayFeatureStabilityAnalyzer:
             state_drift=state_drift,
             state_persistence=state_persistence,
             phase_summary=phase_summary,
+            phase_drift=phase_drift,
+            phase_persistence=phase_persistence,
             redundancy=redundancy,
         )
+
+
+def summarize_cross_asset_phase_consensus(
+    reports: Sequence[IntradayStabilityReport],
+) -> pd.DataFrame:
+    """Conta quanto drift per fase è condiviso, senza produrre classifiche."""
+
+    columns = [
+        "feature",
+        "phase",
+        "assets",
+        "sufficient_assets",
+        "persistent_assets",
+        "persistent_high_assets",
+        "latest_elevated_assets",
+        "latest_high_assets",
+    ]
+    tables = [
+        report.phase_persistence
+        for report in reports
+        if not report.phase_persistence.empty
+    ]
+    if not tables:
+        return pd.DataFrame(columns=columns)
+    combined = pd.concat(tables, ignore_index=True)
+    combined = combined.drop_duplicates(
+        ["ticker", "feature", "phase"],
+        keep="last",
+    )
+    rows: list[dict[str, object]] = []
+    persistent_patterns = {"PERSISTENT_ELEVATED", "PERSISTENT_HIGH"}
+    elevated_levels = {
+        DistributionShift.MODERATE_SHIFT.value,
+        DistributionShift.HIGH_SHIFT.value,
+    }
+    for (feature, phase), group in combined.groupby(
+        ["feature", "phase"],
+        sort=True,
+    ):
+        sufficient = group.loc[group["pattern"] != "INSUFFICIENT"]
+        rows.append(
+            {
+                "feature": feature,
+                "phase": phase,
+                "assets": int(group["ticker"].nunique()),
+                "sufficient_assets": int(sufficient["ticker"].nunique()),
+                "persistent_assets": int(
+                    sufficient.loc[
+                        sufficient["pattern"].isin(persistent_patterns),
+                        "ticker",
+                    ].nunique()
+                ),
+                "persistent_high_assets": int(
+                    sufficient.loc[
+                        sufficient["pattern"] == "PERSISTENT_HIGH",
+                        "ticker",
+                    ].nunique()
+                ),
+                "latest_elevated_assets": int(
+                    sufficient.loc[
+                        sufficient["latest_shift"].isin(elevated_levels),
+                        "ticker",
+                    ].nunique()
+                ),
+                "latest_high_assets": int(
+                    sufficient.loc[
+                        sufficient["latest_shift"]
+                        == DistributionShift.HIGH_SHIFT.value,
+                        "ticker",
+                    ].nunique()
+                ),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)

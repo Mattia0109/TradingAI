@@ -64,8 +64,15 @@ totale tra le frequenze delle categorie. Il report calcola inoltre:
 
 - mediane separate per `OPEN` (09:30–10:30), `MID_SESSION` e `CLOSE`
   (15:00–16:00);
+- drift e persistenza separati per ciascuna delle tre fasi, evitando che una
+  variazione circoscritta venga nascosta dalla distribuzione giornaliera;
 - correlazioni Spearman tra feature numeriche;
 - coppie oltre la soglia di ridondanza dichiarata.
+
+Il riepilogo cross-asset conta, per ogni feature e fase, quanti asset mostrano
+drift persistente e quanti lo mostrano nell'ultima transizione. Non costruisce
+una classifica e non tratta gli ETF come osservazioni indipendenti: SPY, QQQ e
+IWM condividono infatti una parte importante del rischio di mercato.
 
 La ridondanza elevata non elimina automaticamente alcuna feature: segnala
 soltanto che due descrittori hanno raccontato informazioni simili nel campione.

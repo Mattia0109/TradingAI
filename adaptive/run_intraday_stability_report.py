@@ -13,6 +13,7 @@ from adaptive.intraday_stability import (
     IntradayStabilityConfig,
     add_dimensionless_squeeze_features,
     regular_session_frame,
+    summarize_cross_asset_phase_consensus,
 )
 from adaptive.run_adaptive_scan import load_markets
 from data_engine.pipeline import MarketDataPipeline
@@ -176,6 +177,26 @@ def main(argv=None) -> int:
                 f"{row.get('MID_SESSION', math.nan):12.6f} "
                 f"{row.get('CLOSE', math.nan):12.6f}"
             )
+
+    print("\nCONSENSO DESCRITTIVO CROSS-ASSET PER FASE")
+    print(
+        f"{'FEATURE':36} {'PHASE':12} {'ASSET':>5} {'VALID':>5} "
+        f"{'PERSIST':>7} {'P_HIGH':>7} {'LATEST':>6} {'L_HIGH':>6}"
+    )
+    print("-" * 94)
+    consensus = summarize_cross_asset_phase_consensus(reports)
+    if consensus.empty:
+        print("- Evidenza insufficiente per il confronto cross-asset.")
+    else:
+        for row in consensus.itertuples(index=False):
+            print(
+                f"{row.feature:36} {row.phase:12} {row.assets:5d} "
+                f"{row.sufficient_assets:5d} {row.persistent_assets:7d} "
+                f"{row.persistent_high_assets:7d} "
+                f"{row.latest_elevated_assets:6d} "
+                f"{row.latest_high_assets:6d}"
+            )
+    print("Gli asset sono correlati: i conteggi non sono osservazioni indipendenti.")
 
     print("\nRIDONDANZA ELEVATA")
     found_redundancy = False
