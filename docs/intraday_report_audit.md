@@ -33,3 +33,8 @@ python -m adaptive.run_intraday_report_audit `
 not mean that an indicator is accurate, profitable, or suitable for live use.
 The audit reads artifacts only and does not calculate signals, future
 outcomes, orders, positions, or P&L.
+
+After a complete integrated run, the companion research freeze binds this
+manifest to the exact source archives, per-session bar fingerprints, frozen
+parameters, and descriptive implementation. See
+`docs/intraday_research_freeze.md`.

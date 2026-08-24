@@ -26,7 +26,7 @@ Then verify:
 python -m pytest -q
 ```
 
-The complete suite for this bundle is expected to report `385 passed` on the
+The complete suite for this bundle is expected to report `400 passed` on the
 current branch state.
 
 Place the FirstRate Data ZIP files together in a separate local directory and
@@ -42,8 +42,10 @@ python -m adaptive.run_local_intraday_research `
 ```
 
 `--output-dir` creates all 28 standard descriptive CSV paths plus
-`intraday_report_manifest.csv`. The manifest records hashes, schemas, row
-counts and integrity checks, and rejects stale unexpected CSVs. Explicit
+`intraday_report_manifest.csv` and `intraday_research_freeze.json`. The
+manifest records hashes, schemas, row counts and integrity checks, while the
+freeze binds them to parameters, implementation, source archives and each
+historical session. Both reject silent contamination or stale outputs. Explicit
 per-report paths remain available and take precedence when supplied; when one
 is outside the directory, run the standalone audit on the completed set.
 
@@ -149,3 +151,7 @@ coverage and microstructure statistics remain in the locally generated report.
 
 The report is descriptive: it contains no direction, order, size, stop,
 leverage, future outcome, or P&L.
+
+To compare a later untouched checkpoint with the frozen baseline, follow
+`docs/intraday_research_freeze.md`. The forward-readiness result describes
+sample integrity and coverage only; it does not approve a strategy.
