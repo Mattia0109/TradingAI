@@ -10,6 +10,17 @@ from adaptive.learning import (
     RegimeLearningConfig,
     RegimePerformanceState,
 )
+from adaptive.long_burst import (
+    LongBurstConfig,
+    LongBurstRegime,
+    LongBurstSignal,
+    LongBurstSignalEngine,
+)
+from adaptive.long_burst_backtester import (
+    LongBurstBacktestConfig,
+    LongBurstBacktestResult,
+    LongBurstBacktester,
+)
 from adaptive.validation import PromotionGateResult, evaluate_challenger
 
 from adaptive.models import (
@@ -58,6 +69,13 @@ __all__ = [
     "ExecutionDecision",
     "ExecutionEstimate",
     "FeatureSnapshot",
+    "LongBurstBacktestConfig",
+    "LongBurstBacktestResult",
+    "LongBurstBacktester",
+    "LongBurstConfig",
+    "LongBurstRegime",
+    "LongBurstSignal",
+    "LongBurstSignalEngine",
     "MarketRegime",
     "MetaDecision",
     "NewsAssessment",
