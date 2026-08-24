@@ -26,7 +26,7 @@ Then verify:
 python -m pytest -q
 ```
 
-The complete suite for this bundle is expected to report `400 passed` on the
+The complete suite for this bundle is expected to report `402 passed` on the
 current branch state.
 
 Place the FirstRate Data ZIP files together in a separate local directory and
@@ -151,6 +151,19 @@ coverage and microstructure statistics remain in the locally generated report.
 
 The report is descriptive: it contains no direction, order, size, stop,
 leverage, future outcome, or P&L.
+
+If the v15 reports already exist, validate every source ZIP, create the
+immutable baseline freeze, and run its zero-forward-data self-check with one
+command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\freeze_intraday_baseline.ps1
+```
+
+The script uses `venv\Scripts\python.exe` directly, so activation is optional.
+Docker and LEAN are not used. The expected initial readiness state is
+`INCONCLUSIVE` with zero new sessions; this confirms the chronology guard and
+does not evaluate a strategy.
 
 To compare a later untouched checkpoint with the frozen baseline, follow
 `docs/intraday_research_freeze.md`. The forward-readiness result describes
