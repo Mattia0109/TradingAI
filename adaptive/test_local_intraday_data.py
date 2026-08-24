@@ -217,6 +217,18 @@ def test_output_directory_populates_every_standard_report_path() -> None:
     )
 
 
+def test_output_directory_normalizes_windows_separators_portably() -> None:
+    arguments = parse_arguments(
+        ["--data-dir", "C:/data", "--output-dir", r"reports\v15"]
+    )
+
+    assert arguments.output_dir == "reports/v15"
+    assert arguments.matrix_output == (
+        "reports/v15/intraday_feature_stability_matrix.csv"
+    )
+    assert _standard_outputs_share_directory(arguments) is True
+
+
 def test_explicit_report_path_overrides_output_directory_default() -> None:
     arguments = parse_arguments(
         [

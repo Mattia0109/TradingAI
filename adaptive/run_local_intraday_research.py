@@ -6,7 +6,7 @@ import argparse
 import math
 import sys
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pandas as pd
 
@@ -411,10 +411,15 @@ def parse_arguments(argv=None):
 def _resolve_standard_outputs(arguments):
     if not arguments.output_dir:
         return arguments
-    root = Path(arguments.output_dir).expanduser()
+    # Mantiene una rappresentazione stabile e portabile nei valori CLI e nei
+    # manifest, indipendentemente dal separatore nativo del sistema operativo.
+    # Windows accetta i forward slash per questi percorsi e Path li risolve
+    # correttamente quando i file vengono effettivamente scritti.
+    root = Path(str(arguments.output_dir).replace("\\", "/")).expanduser().as_posix()
+    arguments.output_dir = root
     for attribute, filename in STANDARD_REPORT_OUTPUTS.items():
         if getattr(arguments, attribute) is None:
-            setattr(arguments, attribute, str(root / filename))
+            setattr(arguments, attribute, str(PurePosixPath(root) / filename))
     return arguments
 
 
