@@ -196,6 +196,8 @@ def test_freeze_cli_defaults_to_report_directory(tmp_path) -> None:
         ["--data-dir", "C:/data", "--report-dir", "reports/v16"]
     )
 
-    assert arguments.output == "reports/v16/intraday_research_freeze.json"
+    assert Path(arguments.output) == (
+        Path("reports/v16") / "intraday_research_freeze.json"
+    )
     assert arguments.neighbors == 8
     assert arguments.history_limit == 4_000
