@@ -26,7 +26,7 @@ Then verify:
 python -m pytest -q
 ```
 
-The complete suite for this bundle is expected to report `402 passed` on the
+The complete suite for this bundle is expected to report `404 passed` on the
 current branch state.
 
 Place the FirstRate Data ZIP files together in a separate local directory and
