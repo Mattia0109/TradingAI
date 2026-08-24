@@ -44,7 +44,6 @@ IMPLEMENTATION_FILES = (
     "adaptive/research_freeze.py",
     "adaptive/forward_research_readiness.py",
     "adaptive/intraday_report_audit.py",
-    "adaptive/run_local_intraday_research.py",
     "adaptive/intraday_features.py",
     "adaptive/intraday_stability.py",
     "adaptive/intraday_feature_readiness.py",
