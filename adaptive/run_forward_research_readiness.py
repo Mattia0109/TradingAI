@@ -33,7 +33,7 @@ def parse_arguments(argv=None):
     parser.add_argument("--minimum-checkpoints", type=int, default=3)
     parser.add_argument("--minimum-eligible-sources", type=int, default=5)
     arguments = parser.parse_args(argv)
-    root = Path(arguments.candidate_freeze).resolve().parent
+    root = Path(arguments.candidate_freeze).resolve().parent / "forward_readiness"
     if arguments.details_output is None:
         arguments.details_output = str(root / FORWARD_READINESS_DETAILS_FILENAME)
     if arguments.summary_output is None:

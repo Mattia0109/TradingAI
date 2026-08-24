@@ -57,6 +57,11 @@ python -m adaptive.run_forward_research_readiness `
   --candidate-freeze reports\checkpoint_01\intraday_research_freeze.json
 ```
 
+The readiness summary and detail CSV are written below the candidate's
+`forward_readiness` subdirectory. This keeps evidence outputs separate from
+the frozen 28-report directory and prevents them from becoming unexpected
+report inputs during a later integrity audit.
+
 The audit supports either a cumulative archive containing the unchanged
 baseline plus new sessions, or a separate forward-only archive beginning
 strictly after the baseline cutoff. It rejects:
