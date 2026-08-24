@@ -199,10 +199,11 @@ def test_forward_cli_resolves_outputs_next_to_candidate(tmp_path) -> None:
         ]
     )
 
-    assert arguments.details_output.endswith(
-        "checkpoint/forward_readiness/intraday_forward_readiness_details.csv"
+    expected_root = candidate.parent.resolve() / "forward_readiness"
+    assert Path(arguments.details_output) == (
+        expected_root / "intraday_forward_readiness_details.csv"
     )
-    assert arguments.summary_output.endswith(
-        "checkpoint/forward_readiness/intraday_forward_readiness_summary.json"
+    assert Path(arguments.summary_output) == (
+        expected_root / "intraday_forward_readiness_summary.json"
     )
     assert Path(arguments.details_output).parent != candidate.parent
