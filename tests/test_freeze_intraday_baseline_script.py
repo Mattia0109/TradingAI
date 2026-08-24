@@ -8,8 +8,9 @@ def test_freeze_baseline_script_is_local_research_only() -> None:
     )
 
     assert "venv\\Scripts\\python.exe" in script
-    assert "zipfile.ZipFile" in script
-    assert "archive.testzip()" in script
+    assert "adaptive.run_zip_integrity_check" in script
+    assert "$zipValidator" not in script
+    assert " -c " not in script
     assert "adaptive.run_research_freeze" in script
     assert "adaptive.run_forward_research_readiness" in script
     assert '"--baseline-freeze", $freezePath' in script
