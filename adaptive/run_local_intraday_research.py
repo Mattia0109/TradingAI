@@ -47,6 +47,12 @@ from adaptive.intraday_report_audit import (
     audit_intraday_report_directory,
     write_intraday_report_manifest,
 )
+from adaptive.research_freeze import (
+    RESEARCH_FREEZE_FILENAME,
+    build_research_freeze,
+    specification_from_namespace,
+    write_research_freeze,
+)
 
 
 STANDARD_REPORT_OUTPUTS = {
@@ -164,6 +170,15 @@ def parse_arguments(argv=None):
         help=(
             "Directory opzionale che abilita automaticamente tutti i CSV "
             "descrittivi con nomi standard. I percorsi espliciti prevalgono."
+        ),
+    )
+    parser.add_argument(
+        "--research-freeze-output",
+        default=None,
+        help=(
+            "Percorso JSON opzionale per congelare parametri, codice, "
+            "sorgenti, sedute e report. Con --output-dir viene valorizzato "
+            "automaticamente."
         ),
     )
     parser.add_argument(
@@ -417,6 +432,10 @@ def _resolve_standard_outputs(arguments):
     # correttamente quando i file vengono effettivamente scritti.
     root = Path(str(arguments.output_dir).replace("\\", "/")).expanduser().as_posix()
     arguments.output_dir = root
+    if arguments.research_freeze_output is None:
+        arguments.research_freeze_output = str(
+            PurePosixPath(root) / RESEARCH_FREEZE_FILENAME
+        )
     for attribute, filename in STANDARD_REPORT_OUTPUTS.items():
         if getattr(arguments, attribute) is None:
             setattr(arguments, attribute, str(PurePosixPath(root) / filename))
@@ -1745,12 +1764,31 @@ def main(argv=None) -> int:
                     for row in failed.itertuples(index=False)
                 )
                 raise ValueError(f"Audit report non superato: {problems}")
+            if arguments.research_freeze_output:
+                freeze = build_research_freeze(
+                    markets=markets,
+                    source_audits=source_audits,
+                    source_errors=all_errors,
+                    report_directory=arguments.output_dir,
+                    specification=specification_from_namespace(arguments),
+                )
+                freeze_path = write_research_freeze(
+                    freeze,
+                    arguments.research_freeze_output,
+                )
+                print(f"Freeze ricerca: {freeze_path}")
+                print(f"Freeze ID:      {freeze['freeze_id']}")
         else:
             print(
                 "- Audit automatico saltato: almeno un percorso esplicito "
                 "e' esterno a --output-dir. Usa run_intraday_report_audit "
                 "sulla directory completa."
             )
+            if arguments.research_freeze_output:
+                print(
+                    "- Freeze automatico saltato: i 28 report standard non "
+                    "condividono la stessa directory."
+                )
 
     print("\nESITO")
     ready = sum(

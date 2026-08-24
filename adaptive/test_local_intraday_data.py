@@ -164,6 +164,7 @@ def test_local_research_cli_requires_data_dir_and_stays_on_15m() -> None:
     assert arguments.sessions_per_block == 30
     assert arguments.minimum_complete_blocks == 4
     assert arguments.output_dir is None
+    assert arguments.research_freeze_output is None
     assert arguments.matrix_output is None
     assert arguments.regime_atlas_output is None
     assert arguments.regime_transition_output is None
@@ -203,6 +204,9 @@ def test_output_directory_populates_every_standard_report_path() -> None:
     )
 
     assert arguments.matrix_output == "reports/v15/intraday_feature_stability_matrix.csv"
+    assert arguments.research_freeze_output == (
+        "reports/v15/intraday_research_freeze.json"
+    )
     assert arguments.cross_asset_phase_factor_contrast_output == (
         "reports/v15/intraday_phase_factor_contrast.csv"
     )
@@ -223,6 +227,9 @@ def test_output_directory_normalizes_windows_separators_portably() -> None:
     )
 
     assert arguments.output_dir == "reports/v15"
+    assert arguments.research_freeze_output == (
+        "reports/v15/intraday_research_freeze.json"
+    )
     assert arguments.matrix_output == (
         "reports/v15/intraday_feature_stability_matrix.csv"
     )
