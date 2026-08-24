@@ -13,6 +13,7 @@ from adaptive.lorentzian_research import (
     LorentzianResearchConfig,
     lorentzian_distance,
     session_phase_context,
+    session_slot_context,
     summarize_lorentzian_distribution,
 )
 
@@ -91,6 +92,38 @@ class LorentzianResearchTests(unittest.TestCase):
         pd.testing.assert_frame_equal(
             baseline.descriptors.iloc[: cutoff + 1],
             mutated.descriptors.iloc[: cutoff + 1],
+        )
+
+    def test_slot_normalization_is_causal_and_context_isolated(self) -> None:
+        values = research_features(80)
+        phases = session_phase_context(values.index)
+        slots = session_slot_context(values.index)
+        config = compact_config(
+            context_normalization_window=30,
+            context_normalization_min_periods=15,
+        )
+        engine = CausalLorentzianResearchEngine(config)
+        baseline = engine.compute(values, phases, slots)
+        changed = values.copy()
+        changed.loc[slots.eq("SLOT_00"), "choppiness"] = (
+            changed.loc[slots.eq("SLOT_00"), "choppiness"] * 7.0 + 500.0
+        )
+
+        observed = engine.compute(changed, phases, slots)
+
+        unaffected = slots.ne("SLOT_00")
+        pd.testing.assert_series_equal(
+            baseline.normalized_features.loc[unaffected, "choppiness"],
+            observed.normalized_features.loc[unaffected, "choppiness"],
+        )
+        comparable = slots.eq("SLOT_00") & baseline.normalized_features[
+            "choppiness"
+        ].notna()
+        np.testing.assert_allclose(
+            baseline.normalized_features.loc[comparable, "choppiness"],
+            observed.normalized_features.loc[comparable, "choppiness"],
+            rtol=1e-9,
+            atol=1e-9,
         )
 
     def test_positive_affine_rescaling_preserves_descriptors(self) -> None:
@@ -246,6 +279,20 @@ class LorentzianResearchTests(unittest.TestCase):
             context.tolist(),
             ["OPEN", "OPEN", "MID_SESSION", "MID_SESSION", "CLOSE", "CLOSE"],
         )
+
+    def test_session_slot_context_uses_exact_rth_grid(self) -> None:
+        index = pd.DatetimeIndex(
+            ["2025-01-06 09:30", "2025-01-06 10:00", "2025-01-06 15:45"],
+            tz="America/New_York",
+        )
+
+        slots = session_slot_context(index)
+
+        self.assertEqual(slots.tolist(), ["SLOT_00", "SLOT_02", "SLOT_25"])
+        with self.assertRaises(ValueError):
+            session_slot_context(
+                pd.DatetimeIndex(["2025-01-06 09:31"], tz="America/New_York")
+            )
 
 
 if __name__ == "__main__":

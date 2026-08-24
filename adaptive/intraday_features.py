@@ -21,6 +21,7 @@ class FeatureParity(str, Enum):
 
     EXACT_REFERENCE_FORMULA = "EXACT_REFERENCE_FORMULA"
     PARTIAL_MISSING_LIBRARY_SOURCE = "PARTIAL_MISSING_LIBRARY_SOURCE"
+    UNAVAILABLE_NO_VOLUME = "UNAVAILABLE_NO_VOLUME"
 
 
 @dataclass(frozen=True)
@@ -102,7 +103,8 @@ def lorentzian_distance(
 class IntradayReferenceFeatureEngine:
     """Replica causale delle formule complete disponibili nei riferimenti."""
 
-    required_columns = ("open", "high", "low", "close", "volume")
+    price_columns = ("open", "high", "low", "close")
+    required_columns = (*price_columns, "volume")
 
     def __init__(self, config: IntradayFeatureConfig | None = None) -> None:
         self.config = config or IntradayFeatureConfig()
@@ -164,7 +166,11 @@ class IntradayReferenceFeatureEngine:
             raw=True,
         )
 
-    def _prepare(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _prepare(
+        self,
+        data: pd.DataFrame,
+        allow_price_only: bool = False,
+    ) -> pd.DataFrame:
         if not isinstance(data, pd.DataFrame):
             raise TypeError("data deve essere un pandas DataFrame.")
         if data.empty:
@@ -175,7 +181,8 @@ class IntradayReferenceFeatureEngine:
             if not isinstance(frame.index, pd.DatetimeIndex):
                 raise ValueError("Serve una colonna date o un DatetimeIndex.")
             frame["date"] = frame.index
-        missing = [column for column in self.required_columns if column not in frame]
+        required = self.price_columns if allow_price_only else self.required_columns
+        missing = [column for column in required if column not in frame]
         if missing:
             raise ValueError(f"Colonne OHLCV mancanti: {missing}.")
 
@@ -184,16 +191,20 @@ class IntradayReferenceFeatureEngine:
             raise ValueError("Sono presenti timestamp non validi.")
         if frame["date"].duplicated().any():
             raise ValueError("Sono presenti timestamp duplicati.")
-        for column in self.required_columns:
+        numeric_columns = list(self.price_columns)
+        if "volume" in frame:
+            numeric_columns.append("volume")
+        for column in numeric_columns:
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
-        if frame[list(self.required_columns)].isna().any().any():
+        if frame[numeric_columns].isna().any().any():
             raise ValueError("Sono presenti valori OHLCV non numerici.")
         if (frame[["open", "high", "low", "close"]] <= 0.0).any().any():
             raise ValueError("I prezzi devono essere positivi.")
-        if (frame["volume"] < 0.0).any():
-            raise ValueError("Il volume non può essere negativo.")
-        if float(frame["volume"].sum()) <= 0.0:
-            raise ValueError("Il riferimento CMF richiede dati di volume.")
+        if "volume" in frame:
+            if (frame["volume"] < 0.0).any():
+                raise ValueError("Il volume non può essere negativo.")
+            if float(frame["volume"].sum()) <= 0.0:
+                raise ValueError("Il riferimento CMF richiede dati di volume.")
         invalid_ohlc = (
             (frame["high"] < frame["low"])
             | (frame["high"] < frame[["open", "close"]].max(axis=1))
@@ -203,15 +214,19 @@ class IntradayReferenceFeatureEngine:
             raise ValueError("Relazione OHLC non valida.")
         return frame.sort_values("date").reset_index(drop=True)
 
-    def compute(self, data: pd.DataFrame) -> IntradayFeatureReport:
+    def compute(
+        self,
+        data: pd.DataFrame,
+        allow_price_only: bool = False,
+    ) -> IntradayFeatureReport:
         """Calcola serie trailing; ogni riga dipende soltanto da dati fino a t."""
 
         config = self.config
-        frame = self._prepare(data)
+        frame = self._prepare(data, allow_price_only=allow_price_only)
+        has_volume = "volume" in frame
         close = frame["close"]
         high = frame["high"]
         low = frame["low"]
-        volume = frame["volume"]
         true_range = self._true_range(frame)
 
         bb_basis = close.rolling(config.squeeze_bb_length).mean()
@@ -281,27 +296,36 @@ class IntradayReferenceFeatureEngine:
             (chop_valid & (choppiness < config.chop_trending_threshold)).to_numpy()
         ] = "TRENDING"
 
-        candle_range = high - low
-        accumulation_distribution = pd.Series(
-            np.where(
-                candle_range == 0.0,
-                0.0,
-                ((2.0 * close - low - high) / candle_range) * volume,
-            ),
-            index=frame.index,
-            dtype=float,
-        )
-        rolling_volume = volume.rolling(config.cmf_length).sum()
-        cmf = (
-            accumulation_distribution.rolling(config.cmf_length).sum()
-            / rolling_volume.replace(0.0, np.nan)
-        )
-        cmf_highest = cmf.rolling(config.cmf_gradient_length).max()
-        cmf_lowest = cmf.rolling(config.cmf_gradient_length).min()
-        cmf_gradient_extreme = pd.concat(
-            [cmf_highest, cmf_lowest.abs()],
-            axis=1,
-        ).max(axis=1)
+        if has_volume:
+            volume = frame["volume"]
+            candle_range = high - low
+            accumulation_distribution = pd.Series(
+                np.where(
+                    candle_range == 0.0,
+                    0.0,
+                    ((2.0 * close - low - high) / candle_range) * volume,
+                ),
+                index=frame.index,
+                dtype=float,
+            )
+            rolling_volume = volume.rolling(config.cmf_length).sum()
+            cmf = (
+                accumulation_distribution.rolling(config.cmf_length).sum()
+                / rolling_volume.replace(0.0, np.nan)
+            )
+            cmf_highest = cmf.rolling(config.cmf_gradient_length).max()
+            cmf_lowest = cmf.rolling(config.cmf_gradient_length).min()
+            cmf_gradient_extreme = pd.concat(
+                [cmf_highest, cmf_lowest.abs()],
+                axis=1,
+            ).max(axis=1)
+        else:
+            cmf = pd.Series(np.nan, index=frame.index, dtype=float)
+            cmf_gradient_extreme = pd.Series(
+                np.nan,
+                index=frame.index,
+                dtype=float,
+            )
 
         values = pd.DataFrame(
             {
@@ -320,22 +344,30 @@ class IntradayReferenceFeatureEngine:
         parity = {
             "squeeze_momentum": FeatureParity.EXACT_REFERENCE_FORMULA,
             "choppiness": FeatureParity.EXACT_REFERENCE_FORMULA,
-            "cmf": FeatureParity.EXACT_REFERENCE_FORMULA,
+            "cmf": (
+                FeatureParity.EXACT_REFERENCE_FORMULA
+                if has_volume
+                else FeatureParity.UNAVAILABLE_NO_VOLUME
+            ),
             "lorentzian_distance": FeatureParity.EXACT_REFERENCE_FORMULA,
             "lorentzian_classifier": (
                 FeatureParity.PARTIAL_MISSING_LIBRARY_SOURCE
             ),
         }
-        caveats = (
+        caveats = [
             "Il moltiplicatore BB dichiarato 2.0 non è usato dal riferimento; "
             "la deviazione BB usa il moltiplicatore KC 1.5.",
             "Il classificatore Lorentzian completo dipende da MLExtensions/2 "
             "e KernelFunctions/2: qui è disponibile soltanto la distanza esatta.",
             "Colori, alert, filtri operativi e statistiche del riferimento sono "
             "deliberatamente esclusi.",
-        )
+        ]
+        if not has_volume:
+            caveats.append(
+                "Volume assente: CMF non viene calcolato e rimane NaN."
+            )
         return IntradayFeatureReport(
             values=values,
             parity=parity,
-            caveats=caveats,
+            caveats=tuple(caveats),
         )

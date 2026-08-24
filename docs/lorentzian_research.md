@@ -37,6 +37,12 @@ globale o futura entra nella trasformazione. Il valore normalizzato viene
 limitato a `[-8, 8]` per evitare che un singolo dato estremo domini tutte le
 distanze.
 
+Il motore accetta inoltre un contesto separato per la normalizzazione. Il
+report sui file 1m locali usa lo slot esatto della sessione (`09:30`, `09:45`,
+ecc.): ogni barra viene quindi standardizzata soltanto rispetto allo stesso
+orario storico, con 60 osservazioni trailing e 30 di warm-up. Il contesto dei
+vicini resta invece la fase piu' ampia `OPEN`, `MID_SESSION` o `CLOSE`.
+
 ## Vicinato causale
 
 Per ogni barra il motore:
@@ -89,7 +95,13 @@ I test coprono:
 - formula esatta e assenza della radice quadrata;
 - invarianza a trasformazioni affini positive delle feature;
 - immutabilita' dei risultati passati quando vengono modificati dati futuri;
+- isolamento e causalita' della normalizzazione per slot 15m;
 - rispetto dell'embargo;
 - determinismo e numero fisso di vicini;
 - gestione di storia insufficiente e feature costanti;
 - assenza di campi operativi nell'output.
+
+Il report locale esteso confronta inoltre profondita' storiche annidate e due
+filtri di contesto. La specifica e' in
+`docs/lorentzian_neighborhood_stability.md`; tale confronto misura soltanto
+copertura, eta', distanza e sovrapposizione dei vicini.

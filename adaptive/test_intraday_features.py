@@ -197,6 +197,38 @@ def test_zero_volume_is_rejected_like_cmf_reference() -> None:
         IntradayReferenceFeatureEngine().compute(market)
 
 
+def test_price_only_mode_keeps_price_features_and_marks_cmf_unavailable() -> None:
+    market = feature_market().drop(columns="volume")
+    engine = IntradayReferenceFeatureEngine()
+
+    with pytest.raises(ValueError, match="volume"):
+        engine.compute(market)
+    report = engine.compute(market, allow_price_only=True)
+
+    assert report.values["squeeze_momentum"].notna().any()
+    assert report.values["choppiness"].notna().any()
+    assert report.values["cmf"].isna().all()
+    assert report.values["cmf_gradient_extreme"].isna().all()
+    assert report.parity["cmf"] is FeatureParity.UNAVAILABLE_NO_VOLUME
+    assert any("Volume assente" in caveat for caveat in report.caveats)
+
+
+def test_price_only_features_remain_causal() -> None:
+    market = feature_market().drop(columns="volume")
+    engine = IntradayReferenceFeatureEngine()
+    baseline = engine.compute(market, allow_price_only=True).values
+    cutoff = 120
+    changed = market.copy()
+    changed.loc[cutoff + 1 :, ["open", "high", "low", "close"]] *= 1.5
+
+    mutated = engine.compute(changed, allow_price_only=True).values
+
+    pd.testing.assert_frame_equal(
+        baseline.iloc[: cutoff + 1],
+        mutated.iloc[: cutoff + 1],
+    )
+
+
 def test_cli_defaults_to_historical_distribution_report() -> None:
     arguments = parse_arguments([])
 

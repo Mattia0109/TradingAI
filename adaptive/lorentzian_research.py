@@ -49,6 +49,8 @@ class LorentzianResearchConfig:
     feature_columns: tuple[str, ...] = DEFAULT_LORENTZIAN_FEATURES
     normalization_window: int = 260
     normalization_min_periods: int = 130
+    context_normalization_window: int = 60
+    context_normalization_min_periods: int = 30
     neighbors: int = 8
     minimum_candidates: int = 16
     embargo_bars: int = 4
@@ -70,6 +72,12 @@ class LorentzianResearchConfig:
             self.normalization_window
         ):
             raise ValueError("normalization_min_periods non valido.")
+        if int(self.context_normalization_window) < 4:
+            raise ValueError("context_normalization_window deve essere almeno 4.")
+        if not 2 <= int(self.context_normalization_min_periods) <= int(
+            self.context_normalization_window
+        ):
+            raise ValueError("context_normalization_min_periods non valido.")
         if int(self.neighbors) <= 0:
             raise ValueError("neighbors deve essere positivo.")
         if int(self.minimum_candidates) < int(self.neighbors):
@@ -149,6 +157,22 @@ def session_phase_context(index: pd.DatetimeIndex) -> pd.Series:
     return pd.Series(labels, index=index, dtype="object", name="session_phase")
 
 
+def session_slot_context(index: pd.DatetimeIndex) -> pd.Series:
+    """Etichetta ciascuno slot RTH 15m per rimuovere stagionalita' intraday."""
+
+    if not isinstance(index, pd.DatetimeIndex):
+        raise TypeError("index deve essere un DatetimeIndex.")
+    if index.tz is None:
+        raise ValueError("I timestamp devono avere una timezone dichiarata.")
+    local = index.tz_convert("America/New_York")
+    minutes = local.hour * 60 + local.minute
+    offset = minutes - (9 * 60 + 30)
+    if ((offset < 0) | (offset >= 390) | (offset % 15 != 0)).any():
+        raise ValueError("Timestamp fuori dalla griglia RTH 15m.")
+    labels = [f"SLOT_{int(value // 15):02d}" for value in offset]
+    return pd.Series(labels, index=index, dtype="object", name="session_slot")
+
+
 class CausalLorentzianResearchEngine:
     """Costruisce un vicinato storico robusto e strettamente causale."""
 
@@ -180,13 +204,18 @@ class CausalLorentzianResearchEngine:
             raise ValueError("Le feature non possono contenere valori infiniti.")
         return numeric.astype(float)
 
-    def _normalize(self, numeric: pd.DataFrame) -> pd.DataFrame:
-        """Normalizzazione mediana/IQR trailing, senza stime globali."""
+    def _normalize_frame(
+        self,
+        numeric: pd.DataFrame,
+        window: int,
+        min_periods: int,
+    ) -> pd.DataFrame:
+        """Normalizza un frame gia' ordinato usando solo la sua storia."""
 
         config = self.config
         rolling = numeric.rolling(
-            int(config.normalization_window),
-            min_periods=int(config.normalization_min_periods),
+            int(window),
+            min_periods=int(min_periods),
         )
         median = rolling.median()
         lower = rolling.quantile(0.25)
@@ -204,6 +233,42 @@ class CausalLorentzianResearchEngine:
             lower=-float(config.clip_normalized_value),
             upper=float(config.clip_normalized_value),
         )
+
+    def _normalize(
+        self,
+        numeric: pd.DataFrame,
+        normalization_context_values: np.ndarray | None = None,
+    ) -> pd.DataFrame:
+        """Normalizzazione trailing globale o separata per contesto dichiarato."""
+
+        config = self.config
+        if normalization_context_values is None:
+            return self._normalize_frame(
+                numeric,
+                config.normalization_window,
+                config.normalization_min_periods,
+            )
+
+        normalized = pd.DataFrame(
+            np.nan,
+            index=numeric.index,
+            columns=numeric.columns,
+            dtype=float,
+        )
+        contexts = pd.Series(
+            normalization_context_values,
+            index=numeric.index,
+            dtype="object",
+        )
+        for context in pd.unique(contexts):
+            mask = contexts.eq(context)
+            subset = numeric.loc[mask]
+            normalized.loc[mask] = self._normalize_frame(
+                subset,
+                config.context_normalization_window,
+                config.context_normalization_min_periods,
+            )
+        return normalized
 
     @staticmethod
     def _prepare_contexts(
@@ -224,13 +289,18 @@ class CausalLorentzianResearchEngine:
         self,
         values: pd.DataFrame,
         contexts: pd.Series | None = None,
+        normalization_contexts: pd.Series | None = None,
     ) -> LorentzianResearchReport:
         """Calcola descrittori usando soltanto righe storiche ammissibili."""
 
         config = self.config
         numeric = self._prepare_features(values)
-        normalized = self._normalize(numeric)
-        context_values = self._prepare_contexts(normalized.index, contexts)
+        context_values = self._prepare_contexts(numeric.index, contexts)
+        normalization_context_values = self._prepare_contexts(
+            numeric.index,
+            normalization_contexts,
+        )
+        normalized = self._normalize(numeric, normalization_context_values)
         matrix = normalized.to_numpy(dtype=float)
         rows = len(normalized)
 
@@ -318,7 +388,9 @@ class CausalLorentzianResearchEngine:
             "Il classificatore direzionale originale non e' riprodotto: "
             "dipende da librerie esterne non incluse nelle sorgenti.",
             "La normalizzazione mediana/IQR, la ricerca esatta, l'embargo e "
-            "il filtro di contesto sono componenti clean-room descrittivi.",
+            "i filtri di contesto sono componenti clean-room descrittivi.",
+            "Quando normalization_contexts e' fornito, mediana e IQR sono "
+            "stimati separatamente per contesto usando soltanto il passato.",
         )
         return LorentzianResearchReport(
             descriptors=descriptors,
