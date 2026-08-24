@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
 
 from adaptive.forward_research_readiness import (
     ForwardReadinessConfig,
@@ -199,8 +200,9 @@ def test_forward_cli_resolves_outputs_next_to_candidate(tmp_path) -> None:
     )
 
     assert arguments.details_output.endswith(
-        "checkpoint/intraday_forward_readiness_details.csv"
+        "checkpoint/forward_readiness/intraday_forward_readiness_details.csv"
     )
     assert arguments.summary_output.endswith(
-        "checkpoint/intraday_forward_readiness_summary.json"
+        "checkpoint/forward_readiness/intraday_forward_readiness_summary.json"
     )
+    assert Path(arguments.details_output).parent != candidate.parent
