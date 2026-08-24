@@ -34,23 +34,6 @@ $ReportDir = (Resolve-Path -LiteralPath $ReportDir).Path
 Set-Location $projectRoot
 
 Write-Host "Validazione integrita' archivi ZIP..."
-$zipValidator = @'
-import sys
-import zipfile
-
-path = sys.argv[1]
-try:
-    with zipfile.ZipFile(path) as archive:
-        bad_member = archive.testzip()
-except (OSError, zipfile.BadZipFile) as exc:
-    print(f"INVALID: {path}: {exc}")
-    raise SystemExit(2)
-if bad_member is not None:
-    print(f"INVALID: {path}: primo membro corrotto={bad_member}")
-    raise SystemExit(3)
-print(f"OK: {path}")
-'@
-
 foreach ($ticker in $Tickers) {
     $archiveMatches = @(
         Get-ChildItem -LiteralPath $DataDir -File |
@@ -59,7 +42,8 @@ foreach ($ticker in $Tickers) {
     if ($archiveMatches.Count -ne 1) {
         throw "$($ticker): atteso un solo archivio, trovati $($archiveMatches.Count)."
     }
-    & $pythonPath -c $zipValidator $archiveMatches[0].FullName
+    & $pythonPath -m adaptive.run_zip_integrity_check `
+        --file $archiveMatches[0].FullName
     if ($LASTEXITCODE -ne 0) {
         throw "$($ticker): archivio ZIP non valido."
     }
